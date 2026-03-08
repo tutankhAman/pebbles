@@ -2,7 +2,12 @@ import {
   assertAddressWithinBounds,
   normalizeRange,
 } from "@/features/spreadsheet/addressing";
-import type { CellAddress, Selection, SheetBounds } from "@/types/spreadsheet";
+import type {
+  AxisLayout,
+  CellAddress,
+  Selection,
+  SheetBounds,
+} from "@/types/spreadsheet";
 import type { WriteState } from "@/types/ui";
 
 function clamp(value: number, min: number, max: number) {
@@ -26,6 +31,35 @@ export function moveCellAddress(
   return nextAddress;
 }
 
+export function moveCellAddressInLayout(
+  address: CellAddress,
+  delta: {
+    col: number;
+    row: number;
+  },
+  bounds: SheetBounds,
+  columnLayout: AxisLayout,
+  rowLayout: AxisLayout
+) {
+  const nextVisualColumn = clamp(
+    columnLayout.logicalToVisual[address.col] + delta.col,
+    1,
+    bounds.colCount
+  );
+  const nextVisualRow = clamp(
+    rowLayout.logicalToVisual[address.row] + delta.row,
+    1,
+    bounds.rowCount
+  );
+  const nextAddress = {
+    col: columnLayout.order[nextVisualColumn - 1],
+    row: rowLayout.order[nextVisualRow - 1],
+  };
+
+  assertAddressWithinBounds(nextAddress, bounds);
+  return nextAddress;
+}
+
 export function createCellSelection(address: CellAddress): Selection {
   return {
     anchor: address,
@@ -37,11 +71,9 @@ export function createRangeSelection(
   start: CellAddress,
   end: CellAddress
 ): Selection {
-  const normalized = normalizeRange(start, end);
-
   return {
-    end: normalized.end,
-    start: normalized.start,
+    end,
+    start,
     type: "range",
   };
 }
@@ -72,10 +104,95 @@ export function extendSelection(
   return createRangeSelection(getSelectionAnchor(selection), nextFocus);
 }
 
+function getVisualIndexRange(
+  axis: AxisLayout,
+  startLogicalIndex: number,
+  endLogicalIndex: number
+) {
+  const startVisualIndex = axis.logicalToVisual[startLogicalIndex];
+  const endVisualIndex = axis.logicalToVisual[endLogicalIndex];
+
+  return {
+    end: Math.max(startVisualIndex, endVisualIndex),
+    start: Math.min(startVisualIndex, endVisualIndex),
+  };
+}
+
+export function getSelectionMembers(
+  selection: Selection,
+  columnLayout: AxisLayout,
+  rowLayout: AxisLayout
+) {
+  const anchor = getSelectionAnchor(selection);
+  const focus = getSelectionFocus(selection);
+  const columnRange = getVisualIndexRange(columnLayout, anchor.col, focus.col);
+  const rowRange = getVisualIndexRange(rowLayout, anchor.row, focus.row);
+
+  return {
+    columns: columnLayout.order.slice(columnRange.start - 1, columnRange.end),
+    rows: rowLayout.order.slice(rowRange.start - 1, rowRange.end),
+  };
+}
+
+export function getSelectionRect(
+  selection: Selection,
+  columnLayout: AxisLayout,
+  rowLayout: AxisLayout
+) {
+  const members = getSelectionMembers(selection, columnLayout, rowLayout);
+  const firstColumn = members.columns[0];
+  const lastColumn = members.columns.at(-1);
+  const firstRow = members.rows[0];
+  const lastRow = members.rows.at(-1);
+
+  if (
+    firstColumn == null ||
+    lastColumn == null ||
+    firstRow == null ||
+    lastRow == null
+  ) {
+    return {
+      height: 0,
+      left: 0,
+      top: 0,
+      width: 0,
+    };
+  }
+
+  const firstColumnVisual = columnLayout.logicalToVisual[firstColumn];
+  const lastColumnVisual = columnLayout.logicalToVisual[lastColumn];
+  const firstRowVisual = rowLayout.logicalToVisual[firstRow];
+  const lastRowVisual = rowLayout.logicalToVisual[lastRow];
+  const left = columnLayout.starts[firstColumnVisual];
+  const top = rowLayout.starts[firstRowVisual];
+
+  return {
+    height:
+      rowLayout.starts[lastRowVisual] + rowLayout.sizes[lastRowVisual] - top,
+    left,
+    top,
+    width:
+      columnLayout.starts[lastColumnVisual] +
+      columnLayout.sizes[lastColumnVisual] -
+      left,
+  };
+}
+
 export function selectionContainsAddress(
   selection: Selection,
-  address: CellAddress
+  address: CellAddress,
+  columnLayout?: AxisLayout,
+  rowLayout?: AxisLayout
 ) {
+  if (columnLayout && rowLayout) {
+    const members = getSelectionMembers(selection, columnLayout, rowLayout);
+
+    return (
+      members.columns.includes(address.col) &&
+      members.rows.includes(address.row)
+    );
+  }
+
   const bounds = getSelectionBounds(selection);
 
   return (
@@ -92,6 +209,19 @@ export function getSelectionDimensions(selection: Selection) {
   return {
     colCount: bounds.end.col - bounds.start.col + 1,
     rowCount: bounds.end.row - bounds.start.row + 1,
+  };
+}
+
+export function getSelectionDimensionsForLayout(
+  selection: Selection,
+  columnLayout: AxisLayout,
+  rowLayout: AxisLayout
+) {
+  const members = getSelectionMembers(selection, columnLayout, rowLayout);
+
+  return {
+    colCount: members.columns.length,
+    rowCount: members.rows.length,
   };
 }
 

@@ -10,12 +10,24 @@ export interface CellContent {
   raw: string;
 }
 
+export interface CellFormat {
+  backgroundColor?: string;
+  bold?: boolean;
+  italic?: boolean;
+  textColor?: string;
+}
+
 export interface FormulaInput {
   expression: string;
   raw: string;
 }
 
 export interface CellRecord extends CellContent {
+  updatedAt?: number;
+  updatedBy?: string;
+}
+
+export interface CellFormatRecord extends CellFormat {
   updatedAt?: number;
   updatedBy?: string;
 }
@@ -72,4 +84,14 @@ export interface SheetMetrics {
   overscan: number;
   rowHeaderWidth: number;
   rowHeight: number;
+}
+
+export interface AxisLayout {
+  count: number;
+  defaultSize: number;
+  logicalToVisual: number[];
+  order: number[];
+  sizes: number[];
+  starts: number[];
+  totalSize: number;
 }

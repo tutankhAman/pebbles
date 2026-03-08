@@ -3,7 +3,7 @@
 import {
   type ClipboardEvent,
   type KeyboardEvent,
-  type PointerEvent,
+  type PointerEvent as ReactPointerEvent,
   startTransition,
   useEffect,
   useEffectEvent,
@@ -11,29 +11,41 @@ import {
   useRef,
   useState,
 } from "react";
-import { useCollaborationRoom } from "@/features/collaboration/use-collaboration-room";
-import { useFormulaEngine } from "@/features/formulas/use-formula-engine";
 import {
-  createCellKey,
-  normalizeRange,
-  parseCellKey,
-} from "@/features/spreadsheet/addressing";
+  type CollaborationSheetChangeSet,
+  useCollaborationRoom,
+} from "@/features/collaboration/use-collaboration-room";
+import { useFormulaEngine } from "@/features/formulas/use-formula-engine";
+import { createCellKey, parseCellKey } from "@/features/spreadsheet/addressing";
 import { getVisibleWindow } from "@/features/spreadsheet/chunks";
+import {
+  createDelimitedExport,
+  createJsonExport,
+} from "@/features/spreadsheet/export";
 import {
   createCellSelection,
   createRangeSelection,
   extendSelection,
   getNavigationDelta,
   getSelectionAnchor,
-  getSelectionBounds,
-  getSelectionDimensions,
+  getSelectionDimensionsForLayout,
+  getSelectionMembers,
+  getSelectionRect,
   getWriteStateAfterEvent,
   isPrintableCellInput,
-  moveCellAddress,
+  moveCellAddressInLayout,
   parseClipboardMatrix,
   selectionContainsAddress,
   serializeSelectionMatrix,
 } from "@/features/spreadsheet/interaction";
+import {
+  clampColumnWidth,
+  clampRowHeight,
+  createAxisLayouts,
+  getAxisLayoutByLogicalIndex,
+  getAxisVisibleSlice,
+  moveAxisItem,
+} from "@/features/spreadsheet/sheet-layout";
 import { SparseSheet } from "@/features/spreadsheet/sparse-sheet";
 import {
   DEFAULT_SHEET_METRICS,
@@ -47,12 +59,12 @@ import { touchDocument } from "@/lib/metadata/metadata-store";
 import type { DocumentMeta, SessionIdentity } from "@/types/metadata";
 import type {
   CellAddress,
+  CellFormat,
+  CellFormatRecord,
   CellRecord,
   ComputedValue,
   Selection,
-  SheetBounds,
   Viewport,
-  VisibleWindow,
 } from "@/types/spreadsheet";
 import type { EditorMode, WriteState } from "@/types/ui";
 
@@ -62,9 +74,23 @@ const DEFAULT_SELECTION: CellAddress = {
   col: 1,
   row: 1,
 };
-const WRITE_CONFIRMATION_DELAY_MS = 180;
 const RECONNECT_SETTLE_DELAY_MS = 220;
+const WRITE_CONFIRMATION_DELAY_MS = 180;
+
 type EditorSurface = "cell" | "formula-bar";
+type ReorderAxis = "col" | "row";
+type HeaderDragState =
+  | {
+      axis: ReorderAxis;
+      sourceLogicalIndex: number;
+      targetLogicalIndex: number;
+      type: "reorder";
+    }
+  | {
+      axis: ReorderAxis;
+      logicalIndex: number;
+      type: "resize";
+    };
 
 function createSeededSheet(document: DocumentMeta) {
   const sheet = new SparseSheet();
@@ -125,10 +151,6 @@ function getRenderedCellValue(args: {
   return formatComputedValue(args.computedValue) || args.cell.raw;
 }
 
-function buildSequence(start: number, end: number) {
-  return Array.from({ length: end - start + 1 }, (_, index) => start + index);
-}
-
 function getCellKind(raw: string): CellRecord["kind"] {
   if (raw.startsWith("=")) {
     return "formula";
@@ -141,14 +163,230 @@ function getCellKind(raw: string): CellRecord["kind"] {
   return "text";
 }
 
-function getSelectionMatrix(sheet: SparseSheet, selection: Selection) {
-  const selectionBounds = getSelectionBounds(selection);
-  const rows = sheet.readRange(selectionBounds.start, selectionBounds.end);
-
-  return rows.map((row) => row.map((cell) => getCellDisplayValue(cell)));
+function getSelectionMatrix(
+  sheet: SparseSheet,
+  columnOrder: number[],
+  rowOrder: number[]
+) {
+  return rowOrder.map((row) =>
+    columnOrder.map((col) => getCellDisplayValue(sheet.getCell({ col, row })))
+  );
 }
 
-function useVirtualViewport(bounds: SheetBounds) {
+function getCellBackgroundColor(args: {
+  format: CellFormatRecord | null;
+  isActive: boolean;
+  isSelected: boolean;
+}) {
+  if (args.isActive) {
+    return args.format?.backgroundColor ?? "rgba(42,118,130,0.08)";
+  }
+
+  if (args.isSelected) {
+    return args.format?.backgroundColor ?? "rgba(42,118,130,0.04)";
+  }
+
+  return args.format?.backgroundColor ?? "rgba(255,255,255,0.72)";
+}
+
+function getHeaderBackgroundColor(isActive: boolean, isSelected: boolean) {
+  if (isActive) {
+    return "rgba(42,118,130,0.18)";
+  }
+
+  if (isSelected) {
+    return "rgba(42,118,130,0.1)";
+  }
+
+  return "transparent";
+}
+
+function formatWriteState(writeState: WriteState) {
+  switch (writeState) {
+    case "saving":
+      return "Saving...";
+    case "saved":
+      return "Saved";
+    case "reconnecting":
+      return "Reconnecting...";
+    case "offline":
+      return "Offline";
+    default:
+      return "Idle";
+  }
+}
+
+function sanitizeFileName(value: string) {
+  return value
+    .toLowerCase()
+    .replaceAll(/[^a-z0-9]+/gu, "-")
+    .replaceAll(/^-|-$/gu, "");
+}
+
+function downloadExport(filename: string, content: string, mimeType: string) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  const blob = new Blob([content], { type: mimeType });
+  const url = window.URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+
+  window.setTimeout(() => {
+    window.URL.revokeObjectURL(url);
+  }, 0);
+}
+
+function captureLayoutState(sheet: SparseSheet) {
+  return {
+    columnOrder: sheet.getColumnOrder(),
+    columnWidths: sheet.getColumnWidths(),
+    rowHeights: sheet.getRowHeights(),
+    rowOrder: sheet.getRowOrder(),
+  };
+}
+
+function applyRemoteChanges(args: {
+  batchUpsert: (cells: Array<{ key: string; raw: string }>) => void;
+  changes: CollaborationSheetChangeSet;
+  deleteCell: (key: string) => void;
+  markCellsDirty: () => void;
+  markLayoutDirty: () => void;
+  sheet: SparseSheet;
+}) {
+  let didCellChange = false;
+  let didLayoutChange = false;
+  const formulaUpserts: Array<{ key: string; raw: string }> = [];
+
+  for (const change of args.changes.cells) {
+    if (change.value === null) {
+      didCellChange = args.sheet.clearCellByKey(change.key) || didCellChange;
+      args.deleteCell(change.key);
+      continue;
+    }
+
+    args.sheet.setCellByKey(change.key, change.value);
+    formulaUpserts.push({
+      key: change.key,
+      raw: change.value.raw,
+    });
+    didCellChange = true;
+  }
+
+  for (const change of args.changes.formats) {
+    if (change.value === null) {
+      didCellChange =
+        args.sheet.clearCellFormat(parseCellKey(change.key)) || didCellChange;
+      continue;
+    }
+
+    args.sheet.setCellFormatByKey(change.key, change.value);
+    didCellChange = true;
+  }
+
+  for (const change of args.changes.columnWidths) {
+    args.sheet.setColumnWidth(change.index, change.value);
+    didLayoutChange = true;
+  }
+
+  for (const change of args.changes.rowHeights) {
+    args.sheet.setRowHeight(change.index, change.value);
+    didLayoutChange = true;
+  }
+
+  if (args.changes.columnOrder) {
+    args.sheet.setColumnOrder(args.changes.columnOrder);
+    didLayoutChange = true;
+  }
+
+  if (args.changes.rowOrder) {
+    args.sheet.setRowOrder(args.changes.rowOrder);
+    didLayoutChange = true;
+  }
+
+  if (formulaUpserts.length > 0) {
+    args.batchUpsert(formulaUpserts);
+  }
+
+  if (didCellChange) {
+    args.markCellsDirty();
+  }
+
+  if (didLayoutChange) {
+    args.markLayoutDirty();
+  }
+}
+
+function commitHeaderDrag(args: {
+  applyColumnOrder: (order: number[], sync?: boolean) => void;
+  applyRowOrder: (order: number[], sync?: boolean) => void;
+  headerDragState: HeaderDragState;
+  scheduleWriteConfirmation: () => void;
+  setColumnWidth: (column: number, width: number | null) => void;
+  setRowHeight: (row: number, height: number | null) => void;
+  sheet: SparseSheet;
+  syncDocumentTimestamp: () => void;
+}) {
+  if (args.headerDragState.type === "resize") {
+    if (args.headerDragState.axis === "col") {
+      const width = args.sheet.getColumnWidth(
+        args.headerDragState.logicalIndex
+      );
+
+      if (width != null) {
+        args.setColumnWidth(args.headerDragState.logicalIndex, width);
+        args.scheduleWriteConfirmation();
+        args.syncDocumentTimestamp();
+      }
+
+      return;
+    }
+
+    const height = args.sheet.getRowHeight(args.headerDragState.logicalIndex);
+
+    if (height != null) {
+      args.setRowHeight(args.headerDragState.logicalIndex, height);
+      args.scheduleWriteConfirmation();
+      args.syncDocumentTimestamp();
+    }
+
+    return;
+  }
+
+  if (
+    args.headerDragState.sourceLogicalIndex ===
+    args.headerDragState.targetLogicalIndex
+  ) {
+    return;
+  }
+
+  if (args.headerDragState.axis === "col") {
+    args.applyColumnOrder(
+      moveAxisItem(
+        args.sheet.getColumnOrder(),
+        args.headerDragState.sourceLogicalIndex,
+        args.headerDragState.targetLogicalIndex
+      ),
+      true
+    );
+    return;
+  }
+
+  args.applyRowOrder(
+    moveAxisItem(
+      args.sheet.getRowOrder(),
+      args.headerDragState.sourceLogicalIndex,
+      args.headerDragState.targetLogicalIndex
+    ),
+    true
+  );
+}
+
+function useVirtualViewport() {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const frameRef = useRef<number | null>(null);
   const pendingScrollRef = useRef({
@@ -156,15 +394,12 @@ function useVirtualViewport(bounds: SheetBounds) {
     scrollY: 0,
   });
   const [viewport, setViewport] = useState<Viewport>(() =>
-    getViewportFromScroll(
-      {
-        scrollX: 0,
-        scrollY: 0,
-        viewportHeight: DEFAULT_VIEWPORT_HEIGHT,
-        viewportWidth: DEFAULT_VIEWPORT_WIDTH,
-      },
-      bounds
-    )
+    getViewportFromScroll({
+      scrollX: 0,
+      scrollY: 0,
+      viewportHeight: DEFAULT_VIEWPORT_HEIGHT,
+      viewportWidth: DEFAULT_VIEWPORT_WIDTH,
+    })
   );
 
   useEffect(() => {
@@ -182,15 +417,12 @@ function useVirtualViewport(bounds: SheetBounds) {
     ) => {
       startTransition(() => {
         setViewport(
-          getViewportFromScroll(
-            {
-              scrollX: nextScrollX,
-              scrollY: nextScrollY,
-              viewportHeight: nextHeight,
-              viewportWidth: nextWidth,
-            },
-            bounds
-          )
+          getViewportFromScroll({
+            scrollX: nextScrollX,
+            scrollY: nextScrollY,
+            viewportHeight: nextHeight,
+            viewportWidth: nextWidth,
+          })
         );
       });
     };
@@ -215,7 +447,7 @@ function useVirtualViewport(bounds: SheetBounds) {
         cancelAnimationFrame(frameRef.current);
       }
     };
-  }, [bounds]);
+  }, []);
 
   const handleScroll = () => {
     const node = scrollRef.current;
@@ -237,15 +469,12 @@ function useVirtualViewport(bounds: SheetBounds) {
       frameRef.current = null;
       startTransition(() => {
         setViewport(
-          getViewportFromScroll(
-            {
-              scrollX: pendingScrollRef.current.scrollX,
-              scrollY: pendingScrollRef.current.scrollY,
-              viewportHeight: node.clientHeight,
-              viewportWidth: node.clientWidth,
-            },
-            bounds
-          )
+          getViewportFromScroll({
+            scrollX: pendingScrollRef.current.scrollX,
+            scrollY: pendingScrollRef.current.scrollY,
+            viewportHeight: node.clientHeight,
+            viewportWidth: node.clientWidth,
+          })
         );
       });
     });
@@ -256,45 +485,6 @@ function useVirtualViewport(bounds: SheetBounds) {
     scrollRef,
     viewport,
   };
-}
-
-function formatWriteState(writeState: WriteState) {
-  switch (writeState) {
-    case "saving":
-      return "Saving...";
-    case "saved":
-      return "Saved";
-    case "reconnecting":
-      return "Reconnecting...";
-    case "offline":
-      return "Offline";
-    default:
-      return "Idle";
-  }
-}
-
-function getHeaderBackgroundColor(isActive: boolean, isSelected: boolean) {
-  if (isActive) {
-    return "rgba(42,118,130,0.18)";
-  }
-
-  if (isSelected) {
-    return "rgba(42,118,130,0.1)";
-  }
-
-  return "transparent";
-}
-
-function getCellBackgroundColor(isActive: boolean, isSelected: boolean) {
-  if (isActive) {
-    return "rgba(42,118,130,0.08)";
-  }
-
-  if (isSelected) {
-    return "rgba(42,118,130,0.04)";
-  }
-
-  return "rgba(255,255,255,0.72)";
 }
 
 export function VirtualizedSheet({
@@ -315,7 +505,7 @@ export function VirtualizedSheet({
   const commitTimerRef = useRef<number | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
   const writeStateRef = useRef<WriteState>("idle");
-  const [, setSheetRevision] = useState(0);
+  const [, setCellRevision] = useState(0);
   const [selection, setSelection] = useState<Selection>(() =>
     createCellSelection(DEFAULT_SELECTION)
   );
@@ -328,38 +518,105 @@ export function VirtualizedSheet({
   );
   const [draftValue, setDraftValue] = useState("");
   const [writeState, setWriteState] = useState<WriteState>("idle");
+  const [headerDragState, setHeaderDragState] =
+    useState<HeaderDragState | null>(null);
 
   if (sheetRef.current === null) {
     sheetRef.current = new SparseSheet();
   }
 
   const sheet = sheetRef.current;
+  const [layoutState, setLayoutState] = useState(() =>
+    captureLayoutState(sheet)
+  );
   const bounds = sheet.bounds;
-  const { height: gridHeight, width: gridWidth } = getGridDimensions(bounds);
-  const { handleScroll, scrollRef, viewport } = useVirtualViewport(bounds);
+  const { handleScroll, scrollRef, viewport } = useVirtualViewport();
   const activeCell =
     selection.type === "cell" ? selection.anchor : selection.end;
-  const selectionBounds = getSelectionBounds(selection);
-  const selectionStartLayout = getCellLayout(selectionBounds.start);
-  const selectionEndLayout = getCellLayout(selectionBounds.end);
-  const activeCellLayout = getCellLayout(activeCell);
-  const visibleWindow: VisibleWindow = getVisibleWindow(viewport, bounds);
-  const visibleRows = buildSequence(
-    visibleWindow.rowStart,
-    visibleWindow.rowEnd
+  const activeCellRecord = sheet.getCell(activeCell);
+  const activeCellRaw = getCellDisplayValue(activeCellRecord);
+  const activeCellFormat = sheet.getCellFormat(activeCell);
+  const { columnLayout, rowLayout } = useMemo(
+    () =>
+      createAxisLayouts(
+        bounds,
+        DEFAULT_SHEET_METRICS,
+        layoutState.columnOrder,
+        layoutState.rowOrder,
+        layoutState.columnWidths,
+        layoutState.rowHeights
+      ),
+    [bounds, layoutState]
   );
-  const visibleColumns = buildSequence(
-    visibleWindow.colStart,
-    visibleWindow.colEnd
+  const { height: gridHeight, width: gridWidth } = getGridDimensions(
+    columnLayout,
+    rowLayout
   );
-  const selectionDimensions = getSelectionDimensions(selection);
+  const visibleColumnsSlice = useMemo(
+    () =>
+      getAxisVisibleSlice(
+        columnLayout,
+        viewport.scrollX,
+        viewport.viewportWidth ?? DEFAULT_VIEWPORT_WIDTH,
+        DEFAULT_SHEET_METRICS.overscan
+      ),
+    [columnLayout, viewport.scrollX, viewport.viewportWidth]
+  );
+  const visibleRowsSlice = useMemo(
+    () =>
+      getAxisVisibleSlice(
+        rowLayout,
+        viewport.scrollY,
+        viewport.viewportHeight ?? DEFAULT_VIEWPORT_HEIGHT,
+        DEFAULT_SHEET_METRICS.overscan
+      ),
+    [rowLayout, viewport.scrollY, viewport.viewportHeight]
+  );
+  const visibleColumns = visibleColumnsSlice.items;
+  const visibleRows = visibleRowsSlice.items;
+  const visibleWindow = getVisibleWindow(
+    {
+      ...viewport,
+      colEnd: visibleColumnsSlice.visualEnd,
+      colStart: visibleColumnsSlice.visualStart,
+      overscan: DEFAULT_SHEET_METRICS.overscan,
+      rowEnd: visibleRowsSlice.visualEnd,
+      rowStart: visibleRowsSlice.visualStart,
+    },
+    bounds
+  );
+  const selectionMembers = useMemo(
+    () => getSelectionMembers(selection, columnLayout, rowLayout),
+    [columnLayout, rowLayout, selection]
+  );
+  const selectionRect = useMemo(
+    () => getSelectionRect(selection, columnLayout, rowLayout),
+    [columnLayout, rowLayout, selection]
+  );
+  const selectionDimensions = useMemo(
+    () => getSelectionDimensionsForLayout(selection, columnLayout, rowLayout),
+    [columnLayout, rowLayout, selection]
+  );
+  const activeCellLayout = getCellLayout(activeCell, columnLayout, rowLayout);
+  const selectedColumnSet = useMemo(
+    () => new Set(selectionMembers.columns),
+    [selectionMembers.columns]
+  );
+  const selectedRowSet = useMemo(
+    () => new Set(selectionMembers.rows),
+    [selectionMembers.rows]
+  );
+  const seededSheetSnapshot = useMemo(
+    () => createSeededSheet(document).snapshot(),
+    [document]
+  );
   const initialSeedCells = useMemo(
     () =>
-      Array.from(createSeededSheet(document).snapshot(), ([key, value]) => ({
+      Array.from(seededSheetSnapshot.cells, ([key, value]) => ({
         key,
         raw: value.raw,
       })),
-    [document]
+    [seededSheetSnapshot]
   );
   const initialFormulaCells = useMemo(
     () =>
@@ -388,55 +645,54 @@ export function VirtualizedSheet({
     initialCells: initialFormulaCells,
     visibleKeys,
   });
-  const handleCollaborativeCellChanges = useEffectEvent(
-    (changes: Array<{ key: string; value: CellRecord | null }>) => {
+  const syncDocumentTimestamp = () => {
+    touchDocument(document.id).catch(() => undefined);
+  };
+  const setCellRevisionWithTransition = () => {
+    startTransition(() => {
+      setCellRevision((current) => current + 1);
+    });
+  };
+  const setLayoutRevisionWithTransition = () => {
+    startTransition(() => {
+      setLayoutState(captureLayoutState(sheetRef.current as SparseSheet));
+    });
+  };
+  const handleCollaborativeSheetChanges = useEffectEvent(
+    (changes: CollaborationSheetChangeSet) => {
       const sheetModel = sheetRef.current;
 
       if (!sheetModel) {
         return;
       }
-
-      const formulaUpserts: Array<{ key: string; raw: string }> = [];
-
-      for (const change of changes) {
-        if (change.value === null) {
-          sheetModel.clearCellByKey(change.key);
-          deleteCell(change.key);
-          continue;
-        }
-
-        sheetModel.setCellByKey(change.key, change.value);
-        formulaUpserts.push({
-          key: change.key,
-          raw: change.value.raw,
-        });
-      }
-
-      if (formulaUpserts.length > 0) {
-        batchUpsert(formulaUpserts);
-      }
-
-      setSheetRevision((current) => current + 1);
+      applyRemoteChanges({
+        batchUpsert,
+        changes,
+        deleteCell,
+        markCellsDirty: setCellRevisionWithTransition,
+        markLayoutDirty: setLayoutRevisionWithTransition,
+        sheet: sheetModel,
+      });
     }
   );
   const {
+    batchFormat,
     batchUpsert: syncBatchUpsert,
     lastRemoteLatencyMs,
     peers,
+    setColumnOrder,
+    setColumnWidth,
+    setRowHeight,
+    setRowOrder,
     status,
     upsertCell: syncUpsertCell,
   } = useCollaborationRoom({
     initialCells: initialSeedCells,
-    onCellsChanged: handleCollaborativeCellChanges,
+    onSheetChanged: handleCollaborativeSheetChanges,
     roomId: document.roomId,
     selection,
     session,
   });
-  const activeCellRecord = sheet.getCell(activeCell);
-  const activeCellRaw = getCellDisplayValue(activeCellRecord);
-  const syncDocumentTimestamp = () => {
-    touchDocument(document.id).catch(() => undefined);
-  };
 
   const applyOptimisticCellWrite = (address: CellAddress, raw: string) => {
     const key = createCellKey(address);
@@ -446,7 +702,7 @@ export function VirtualizedSheet({
 
       if (changed) {
         deleteCell(key);
-        setSheetRevision((current) => current + 1);
+        setCellRevisionWithTransition();
       }
 
       return;
@@ -460,7 +716,7 @@ export function VirtualizedSheet({
       key,
       raw,
     });
-    setSheetRevision((current) => current + 1);
+    setCellRevisionWithTransition();
   };
 
   const applyOptimisticBatchWrite = (
@@ -496,7 +752,76 @@ export function VirtualizedSheet({
     }
 
     if (didChange) {
-      setSheetRevision((current) => current + 1);
+      setCellRevisionWithTransition();
+    }
+  };
+
+  const applyFormattingPatch = (patch: CellFormat) => {
+    const formatChanges = selectionMembers.rows.flatMap((row) =>
+      selectionMembers.columns.map((col) => {
+        const key = createCellKey({ col, row });
+        const nextFormat = sheet.patchCellFormat({ col, row }, patch);
+
+        return {
+          format: nextFormat,
+          key,
+        };
+      })
+    );
+
+    if (formatChanges.length === 0) {
+      return;
+    }
+
+    setCellRevisionWithTransition();
+    batchFormat(formatChanges);
+    scheduleWriteConfirmation();
+    syncDocumentTimestamp();
+  };
+
+  const applyColumnWidth = (column: number, width: number, sync = false) => {
+    const nextWidth = clampColumnWidth(width);
+    sheet.setColumnWidth(column, nextWidth);
+    setLayoutRevisionWithTransition();
+
+    if (sync) {
+      setColumnWidth(column, nextWidth);
+      scheduleWriteConfirmation();
+      syncDocumentTimestamp();
+    }
+  };
+
+  const applyRowHeight = (row: number, height: number, sync = false) => {
+    const nextHeight = clampRowHeight(height);
+    sheet.setRowHeight(row, nextHeight);
+    setLayoutRevisionWithTransition();
+
+    if (sync) {
+      setRowHeight(row, nextHeight);
+      scheduleWriteConfirmation();
+      syncDocumentTimestamp();
+    }
+  };
+
+  const applyColumnOrder = (order: number[], sync = false) => {
+    sheet.setColumnOrder(order);
+    setLayoutRevisionWithTransition();
+
+    if (sync) {
+      setColumnOrder(order);
+      scheduleWriteConfirmation();
+      syncDocumentTimestamp();
+    }
+  };
+
+  const applyRowOrder = (order: number[], sync = false) => {
+    sheet.setRowOrder(order);
+    setLayoutRevisionWithTransition();
+
+    if (sync) {
+      setRowOrder(order);
+      scheduleWriteConfirmation();
+      syncDocumentTimestamp();
     }
   };
 
@@ -540,7 +865,7 @@ export function VirtualizedSheet({
       return;
     }
 
-    const layout = getCellLayout(address);
+    const layout = getCellLayout(address, columnLayout, rowLayout);
     const cellRight = layout.left + layout.width;
     const cellBottom = layout.top + layout.height;
 
@@ -577,27 +902,12 @@ export function VirtualizedSheet({
   };
 
   const clearSelectionContents = () => {
-    const clearedKeys: Array<{
-      key: string;
-      raw: string;
-    }> = [];
-
-    for (
-      let row = selectionBounds.start.row;
-      row <= selectionBounds.end.row;
-      row += 1
-    ) {
-      for (
-        let col = selectionBounds.start.col;
-        col <= selectionBounds.end.col;
-        col += 1
-      ) {
-        clearedKeys.push({
-          key: createCellKey({ col, row }),
-          raw: "",
-        });
-      }
-    }
+    const clearedKeys = selectionMembers.rows.flatMap((row) =>
+      selectionMembers.columns.map((col) => ({
+        key: createCellKey({ col, row }),
+        raw: "",
+      }))
+    );
 
     if (clearedKeys.length === 0) {
       return;
@@ -646,6 +956,50 @@ export function VirtualizedSheet({
     applySelection(nextSelection);
   };
 
+  const handleExport = (format: "csv" | "json" | "tsv") => {
+    const cells = sheet.getCells();
+    const snapshot = sheet.snapshot();
+    const usedColumns = new Set<number>();
+    const usedRows = new Set<number>();
+
+    for (const key of cells.keys()) {
+      const address = parseCellKey(key);
+      usedColumns.add(address.col);
+      usedRows.add(address.row);
+    }
+
+    const columns = usedColumns.size
+      ? snapshot.columnOrder.filter((column) => usedColumns.has(column))
+      : [activeCell.col];
+    const rows = usedRows.size
+      ? snapshot.rowOrder.filter((row) => usedRows.has(row))
+      : [activeCell.row];
+    const matrix = getSelectionMatrix(sheet, columns, rows);
+    const baseName = sanitizeFileName(document.title) || "sheet";
+
+    if (format === "json") {
+      downloadExport(
+        `${baseName}.json`,
+        createJsonExport({
+          cells,
+          columnOrder: snapshot.columnOrder,
+          columnWidths: snapshot.columnWidths,
+          formats: snapshot.formats,
+          rowHeights: snapshot.rowHeights,
+          rowOrder: snapshot.rowOrder,
+        }),
+        "application/json"
+      );
+      return;
+    }
+
+    downloadExport(
+      `${baseName}.${format}`,
+      createDelimitedExport(matrix, format === "csv" ? "," : "\t"),
+      format === "csv" ? "text/csv" : "text/tab-separated-values"
+    );
+  };
+
   useEffect(() => {
     if (!editingAddress) {
       return;
@@ -679,7 +1033,7 @@ export function VirtualizedSheet({
       onWriteStateChange?.(nextWriteState);
     };
 
-    const emitWriteEvent = (
+    const emitWindowWriteEvent = (
       event:
         | "flush-confirmed"
         | "flush-queued"
@@ -694,7 +1048,7 @@ export function VirtualizedSheet({
     };
 
     const handleOnline = () => {
-      emitWriteEvent("network-online");
+      emitWindowWriteEvent("network-online");
 
       if (reconnectTimerRef.current !== null) {
         window.clearTimeout(reconnectTimerRef.current);
@@ -727,7 +1081,118 @@ export function VirtualizedSheet({
     };
   }, [onWriteStateChange]);
 
-  const getAddressFromPointerEvent = (event: PointerEvent<HTMLDivElement>) => {
+  const handleHeaderPointerMove = useEffectEvent(
+    (event: globalThis.PointerEvent) => {
+      if (!headerDragState) {
+        return;
+      }
+
+      const node = scrollRef.current;
+
+      if (!node) {
+        return;
+      }
+
+      const rect = node.getBoundingClientRect();
+      const pointerX = event.clientX - rect.left + node.scrollLeft;
+      const pointerY = event.clientY - rect.top + node.scrollTop;
+
+      if (headerDragState.type === "resize") {
+        if (headerDragState.axis === "col") {
+          const layout = getAxisLayoutByLogicalIndex(
+            columnLayout,
+            headerDragState.logicalIndex
+          );
+
+          applyColumnWidth(
+            headerDragState.logicalIndex,
+            pointerX - layout.start
+          );
+          return;
+        }
+
+        const layout = getAxisLayoutByLogicalIndex(
+          rowLayout,
+          headerDragState.logicalIndex
+        );
+
+        applyRowHeight(headerDragState.logicalIndex, pointerY - layout.start);
+        return;
+      }
+
+      if (headerDragState.axis === "col") {
+        const nextTarget = getCellAddressFromPoint(
+          { x: pointerX, y: 0 },
+          bounds,
+          columnLayout,
+          rowLayout
+        ).col;
+
+        setHeaderDragState((current) =>
+          current?.type === "reorder" && current.axis === "col"
+            ? {
+                ...current,
+                targetLogicalIndex: nextTarget,
+              }
+            : current
+        );
+        return;
+      }
+
+      const nextTarget = getCellAddressFromPoint(
+        { x: 0, y: pointerY },
+        bounds,
+        columnLayout,
+        rowLayout
+      ).row;
+
+      setHeaderDragState((current) =>
+        current?.type === "reorder" && current.axis === "row"
+          ? {
+              ...current,
+              targetLogicalIndex: nextTarget,
+            }
+          : current
+      );
+    }
+  );
+
+  const handleHeaderPointerUp = useEffectEvent(() => {
+    if (!headerDragState) {
+      return;
+    }
+
+    commitHeaderDrag({
+      applyColumnOrder,
+      applyRowOrder,
+      headerDragState,
+      scheduleWriteConfirmation,
+      setColumnWidth,
+      setRowHeight,
+      sheet,
+      syncDocumentTimestamp,
+    });
+
+    setHeaderDragState(null);
+  });
+
+  useEffect(() => {
+    if (!headerDragState) {
+      return;
+    }
+
+    window.addEventListener("pointermove", handleHeaderPointerMove);
+    window.addEventListener("pointerup", handleHeaderPointerUp, { once: true });
+
+    return () => {
+      window.removeEventListener("pointermove", handleHeaderPointerMove);
+      window.removeEventListener("pointerup", handleHeaderPointerUp);
+    };
+  }, [headerDragState]);
+
+  const getAddressFromPointerEvent = (
+    event: ReactPointerEvent<HTMLDivElement>
+  ) => {
     const node = scrollRef.current;
 
     if (!node) {
@@ -741,12 +1206,14 @@ export function VirtualizedSheet({
         x: event.clientX - rect.left + node.scrollLeft,
         y: event.clientY - rect.top + node.scrollTop,
       },
-      bounds
+      bounds,
+      columnLayout,
+      rowLayout
     );
   };
 
-  const handlePointerDown = (event: PointerEvent<HTMLDivElement>) => {
-    if (editingAddress) {
+  const handlePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (editingAddress || headerDragState) {
       return;
     }
 
@@ -771,7 +1238,7 @@ export function VirtualizedSheet({
     node.setPointerCapture(event.pointerId);
   };
 
-  const handlePointerMove = (event: PointerEvent<HTMLDivElement>) => {
+  const handlePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!isPointerSelectingRef.current) {
       return;
     }
@@ -786,7 +1253,7 @@ export function VirtualizedSheet({
     setSelection(createRangeSelection(anchor, nextAddress));
   };
 
-  const handlePointerUp = (event: PointerEvent<HTMLDivElement>) => {
+  const handlePointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
     const node = scrollRef.current;
 
     if (node?.hasPointerCapture(event.pointerId)) {
@@ -797,7 +1264,7 @@ export function VirtualizedSheet({
     pointerAnchorRef.current = null;
   };
 
-  const handleDoubleClick = (event: PointerEvent<HTMLDivElement>) => {
+  const handleDoubleClick = (event: ReactPointerEvent<HTMLDivElement>) => {
     const nextAddress = getAddressFromPointerEvent(event);
 
     if (!nextAddress) {
@@ -826,7 +1293,13 @@ export function VirtualizedSheet({
     ) {
       event.preventDefault();
       const delta = getNavigationDelta(event.key, event.shiftKey);
-      const nextAddress = moveCellAddress(activeCell, delta, bounds);
+      const nextAddress = moveCellAddressInLayout(
+        activeCell,
+        delta,
+        bounds,
+        columnLayout,
+        rowLayout
+      );
 
       applySelection(
         event.shiftKey
@@ -858,7 +1331,11 @@ export function VirtualizedSheet({
     event: ClipboardEvent<HTMLDivElement | HTMLTextAreaElement>
   ) => {
     event.preventDefault();
-    const matrix = getSelectionMatrix(sheet, selection);
+    const matrix = getSelectionMatrix(
+      sheet,
+      selectionMembers.columns,
+      selectionMembers.rows
+    );
     event.clipboardData.setData("text/plain", serializeSelectionMatrix(matrix));
   };
 
@@ -874,11 +1351,23 @@ export function VirtualizedSheet({
       return;
     }
 
+    const startColumn = selectionMembers.columns[0] ?? activeCell.col;
+    const startRow = selectionMembers.rows[0] ?? activeCell.row;
     const pastedCells = matrix.flatMap((rowValues, rowOffset) =>
       rowValues.map((value, colOffset) => ({
         key: createCellKey({
-          col: selectionBounds.start.col + colOffset,
-          row: selectionBounds.start.row + rowOffset,
+          col: columnLayout.order[
+            Math.min(
+              columnLayout.count,
+              columnLayout.logicalToVisual[startColumn] + colOffset
+            ) - 1
+          ],
+          row: rowLayout.order[
+            Math.min(
+              rowLayout.count,
+              rowLayout.logicalToVisual[startRow] + rowOffset
+            ) - 1
+          ],
         }),
         raw: value,
       }))
@@ -889,19 +1378,27 @@ export function VirtualizedSheet({
     scheduleWriteConfirmation();
     syncDocumentTimestamp();
 
-    const rowCount = matrix.length;
-    const colCount = Math.max(...matrix.map((row) => row.length), 1);
+    const endColumnVisual = Math.min(
+      columnLayout.count,
+      columnLayout.logicalToVisual[startColumn] +
+        Math.max(...matrix.map((row) => row.length), 1) -
+        1
+    );
+    const endRowVisual = Math.min(
+      rowLayout.count,
+      rowLayout.logicalToVisual[startRow] + matrix.length - 1
+    );
     applySelection(
-      createRangeSelection(selectionBounds.start, {
-        col: Math.min(
-          bounds.colCount,
-          selectionBounds.start.col + colCount - 1
-        ),
-        row: Math.min(
-          bounds.rowCount,
-          selectionBounds.start.row + rowCount - 1
-        ),
-      })
+      createRangeSelection(
+        {
+          col: startColumn,
+          row: startRow,
+        },
+        {
+          col: columnLayout.order[endColumnVisual - 1],
+          row: rowLayout.order[endRowVisual - 1],
+        }
+      )
     );
   };
 
@@ -918,7 +1415,13 @@ export function VirtualizedSheet({
         event.key === "Enter" ? "Enter" : "Tab",
         event.shiftKey
       );
-      const nextAddress = moveCellAddress(activeCell, delta, bounds);
+      const nextAddress = moveCellAddressInLayout(
+        activeCell,
+        delta,
+        bounds,
+        columnLayout,
+        rowLayout
+      );
       commitEditing({
         nextSelection: createCellSelection(nextAddress),
       });
@@ -950,15 +1453,6 @@ export function VirtualizedSheet({
     editingAddress.col === activeCell.col
       ? draftValue
       : activeCellRaw;
-
-  const selectionWidth =
-    selectionEndLayout.left -
-    selectionStartLayout.left +
-    selectionEndLayout.width;
-  const selectionHeight =
-    selectionEndLayout.top -
-    selectionStartLayout.top +
-    selectionEndLayout.height;
 
   return (
     <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-[1.75rem] border border-[var(--border)] bg-white/82 shadow-[0_18px_48px_rgba(15,23,42,0.08)]">
@@ -992,6 +1486,7 @@ export function VirtualizedSheet({
             Selection {selectionDimensions.rowCount}x
             {selectionDimensions.colCount}
           </span>
+          <span className="font-mono">Drag grips reorder. Edges resize.</span>
         </div>
         <div className="flex flex-wrap items-center gap-3 font-mono">
           <span>{isReady ? "Formulas ready" : "Formulas warming"}</span>
@@ -1016,49 +1511,127 @@ export function VirtualizedSheet({
           fx {getColumnHeaderLabel(activeCell.col)}
           {activeCell.row}
         </div>
-        <div className="flex items-center gap-3 rounded-[1.15rem] border border-[var(--border)] bg-white/88 px-4 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]">
-          <span className="font-mono text-[0.78rem] text-[var(--muted)] uppercase tracking-[0.24em]">
-            Formula
-          </span>
-          <input
-            className="h-9 w-full bg-transparent text-[0.96rem] text-[var(--foreground)] outline-none placeholder:text-[var(--muted)]"
-            onBlur={() => {
-              if (editingSurface === "formula-bar") {
-                commitEditing({
-                  nextSelection: createCellSelection(activeCell),
-                });
-              }
-            }}
-            onChange={(event) => {
-              if (editingAddress == null || editingSurface !== "formula-bar") {
-                setEditingAddress(activeCell);
-                setEditingSurface("formula-bar");
-              }
-
-              setDraftValue(event.target.value);
-              setEditorMode(
-                event.target.value.startsWith("=") ? "formula" : "edit"
-              );
-            }}
-            onFocus={handleFormulaBarFocus}
-            onKeyDown={handleFormulaBarKeyDown}
-            placeholder="Type a value or formula like =SUM(A5:B5)"
-            ref={formulaBarRef}
-            value={formulaBarValue}
-          />
+        <div className="flex min-w-0 flex-col gap-3">
           <div className="flex flex-wrap items-center gap-2">
-            {peers.map((peer) => (
-              <span
-                className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-[rgba(248,250,251,0.92)] px-3 py-1 text-[0.78rem] text-[var(--foreground)]"
-                key={peer.userId}
-              >
+            <button
+              className={`rounded-full border px-3 py-2 text-sm ${
+                activeCellFormat?.bold
+                  ? "border-[var(--accent)] bg-[rgba(42,118,130,0.12)] text-[var(--accent)]"
+                  : "border-[var(--border)] bg-white/80"
+              }`}
+              onClick={() => {
+                applyFormattingPatch({
+                  bold: !activeCellFormat?.bold,
+                });
+              }}
+              type="button"
+            >
+              Bold
+            </button>
+            <button
+              className={`rounded-full border px-3 py-2 text-sm ${
+                activeCellFormat?.italic
+                  ? "border-[var(--accent)] bg-[rgba(42,118,130,0.12)] text-[var(--accent)]"
+                  : "border-[var(--border)] bg-white/80"
+              }`}
+              onClick={() => {
+                applyFormattingPatch({
+                  italic: !activeCellFormat?.italic,
+                });
+              }}
+              type="button"
+            >
+              Italic
+            </button>
+            <label className="flex items-center gap-2 rounded-full border border-[var(--border)] bg-white/80 px-3 py-2 text-sm">
+              Text
+              <input
+                aria-label="Cell text color"
+                className="h-7 w-10 rounded-md border border-[var(--border)]"
+                onChange={(event) => {
+                  applyFormattingPatch({
+                    textColor: event.target.value,
+                  });
+                }}
+                type="color"
+                value={activeCellFormat?.textColor ?? "#172333"}
+              />
+            </label>
+            <button
+              className="rounded-full border border-[var(--border)] bg-white/80 px-3 py-2 text-sm"
+              onClick={() => {
+                handleExport("csv");
+              }}
+              type="button"
+            >
+              Export CSV
+            </button>
+            <button
+              className="rounded-full border border-[var(--border)] bg-white/80 px-3 py-2 text-sm"
+              onClick={() => {
+                handleExport("tsv");
+              }}
+              type="button"
+            >
+              Export TSV
+            </button>
+            <button
+              className="rounded-full border border-[var(--border)] bg-white/80 px-3 py-2 text-sm"
+              onClick={() => {
+                handleExport("json");
+              }}
+              type="button"
+            >
+              Export JSON
+            </button>
+          </div>
+          <div className="flex items-center gap-3 rounded-[1.15rem] border border-[var(--border)] bg-white/88 px-4 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]">
+            <span className="font-mono text-[0.78rem] text-[var(--muted)] uppercase tracking-[0.24em]">
+              Formula
+            </span>
+            <input
+              className="h-9 w-full bg-transparent text-[0.96rem] text-[var(--foreground)] outline-none placeholder:text-[var(--muted)]"
+              onBlur={() => {
+                if (editingSurface === "formula-bar") {
+                  commitEditing({
+                    nextSelection: createCellSelection(activeCell),
+                  });
+                }
+              }}
+              onChange={(event) => {
+                if (
+                  editingAddress == null ||
+                  editingSurface !== "formula-bar"
+                ) {
+                  setEditingAddress(activeCell);
+                  setEditingSurface("formula-bar");
+                }
+
+                setDraftValue(event.target.value);
+                setEditorMode(
+                  event.target.value.startsWith("=") ? "formula" : "edit"
+                );
+              }}
+              onFocus={handleFormulaBarFocus}
+              onKeyDown={handleFormulaBarKeyDown}
+              placeholder="Type a value or formula like =SUM(A5:B5)"
+              ref={formulaBarRef}
+              value={formulaBarValue}
+            />
+            <div className="flex flex-wrap items-center gap-2">
+              {peers.map((peer) => (
                 <span
-                  className="h-2.5 w-2.5 rounded-full"
-                  style={{ backgroundColor: peer.color }}
-                />
-                {peer.displayName}
-              </span>
-            ))}
+                  className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-[rgba(248,250,251,0.92)] px-3 py-1 text-[0.78rem] text-[var(--foreground)]"
+                  key={peer.userId}
+                >
+                  <span
+                    className="h-2.5 w-2.5 rounded-full"
+                    style={{ backgroundColor: peer.color }}
+                  />
+                  {peer.displayName}
+                </span>
+              ))}
+            </div>
           </div>
         </div>
       </div>
@@ -1070,16 +1643,14 @@ export function VirtualizedSheet({
 
         <div className="relative overflow-hidden border-[var(--border)] border-b bg-[rgba(236,241,244,0.92)]">
           {visibleColumns.map((column) => {
-            const left =
-              (column - 1) * DEFAULT_SHEET_METRICS.colWidth - viewport.scrollX;
-            const isSelectedColumn =
-              column >= selectionBounds.start.col &&
-              column <= selectionBounds.end.col;
+            const layout = getAxisLayoutByLogicalIndex(columnLayout, column);
+            const left = layout.start - viewport.scrollX;
+            const isSelectedColumn = selectedColumnSet.has(column);
             const isActiveColumn = column === activeCell.col;
 
             return (
               <div
-                className="absolute top-0 flex h-full items-center border-[var(--border)] border-r px-3 font-mono text-[0.76rem] uppercase tracking-[0.22em]"
+                className="absolute top-0 h-full border-[var(--border)] border-r"
                 key={`column-${column}`}
                 style={{
                   backgroundColor: getHeaderBackgroundColor(
@@ -1090,10 +1661,41 @@ export function VirtualizedSheet({
                     ? "var(--foreground)"
                     : "var(--muted)",
                   left,
-                  width: DEFAULT_SHEET_METRICS.colWidth,
+                  width: layout.size,
                 }}
               >
-                {getColumnHeaderLabel(column)}
+                <div className="flex h-full items-center gap-2 px-2 font-mono text-[0.76rem] uppercase tracking-[0.22em]">
+                  <button
+                    aria-label={`Reorder column ${getColumnHeaderLabel(column)}`}
+                    className="rounded-md px-1 text-[0.8rem] text-[var(--muted)] hover:bg-white/70"
+                    onPointerDown={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setHeaderDragState({
+                        axis: "col",
+                        sourceLogicalIndex: column,
+                        targetLogicalIndex: column,
+                        type: "reorder",
+                      });
+                    }}
+                    type="button"
+                  >
+                    ::
+                  </button>
+                  <span>{getColumnHeaderLabel(column)}</span>
+                </div>
+                <div
+                  className="absolute top-0 right-0 h-full w-2 cursor-col-resize"
+                  onPointerDown={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setHeaderDragState({
+                      axis: "col",
+                      logicalIndex: column,
+                      type: "resize",
+                    });
+                  }}
+                />
               </div>
             );
           })}
@@ -1101,16 +1703,14 @@ export function VirtualizedSheet({
 
         <div className="relative overflow-hidden border-[var(--border)] border-r bg-[rgba(248,249,250,0.92)]">
           {visibleRows.map((row) => {
-            const top =
-              (row - 1) * DEFAULT_SHEET_METRICS.rowHeight - viewport.scrollY;
-            const isSelectedRow =
-              row >= selectionBounds.start.row &&
-              row <= selectionBounds.end.row;
+            const layout = getAxisLayoutByLogicalIndex(rowLayout, row);
+            const top = layout.start - viewport.scrollY;
+            const isSelectedRow = selectedRowSet.has(row);
             const isActiveRow = row === activeCell.row;
 
             return (
               <div
-                className="absolute left-0 flex items-center border-[var(--border)] border-b px-3 font-mono text-[0.75rem] tracking-[0.18em]"
+                className="absolute left-0 border-[var(--border)] border-b"
                 key={`row-${row}`}
                 style={{
                   backgroundColor: getHeaderBackgroundColor(
@@ -1118,12 +1718,43 @@ export function VirtualizedSheet({
                     isSelectedRow
                   ),
                   color: isSelectedRow ? "var(--foreground)" : "var(--muted)",
-                  height: DEFAULT_SHEET_METRICS.rowHeight,
+                  height: layout.size,
                   top,
                   width: "100%",
                 }}
               >
-                {row}
+                <div className="flex h-full items-center gap-2 px-2 font-mono text-[0.75rem] tracking-[0.18em]">
+                  <button
+                    aria-label={`Reorder row ${row}`}
+                    className="rounded-md px-1 text-[0.8rem] text-[var(--muted)] hover:bg-white/70"
+                    onPointerDown={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setHeaderDragState({
+                        axis: "row",
+                        sourceLogicalIndex: row,
+                        targetLogicalIndex: row,
+                        type: "reorder",
+                      });
+                    }}
+                    type="button"
+                  >
+                    ::
+                  </button>
+                  <span>{row}</span>
+                </div>
+                <div
+                  className="absolute right-0 bottom-0 h-2 w-full cursor-row-resize"
+                  onPointerDown={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setHeaderDragState({
+                      axis: "row",
+                      logicalIndex: row,
+                      type: "resize",
+                    });
+                  }}
+                />
               </div>
             );
           })}
@@ -1152,11 +1783,17 @@ export function VirtualizedSheet({
               visibleColumns.map((column) => {
                 const address = { col: column, row };
                 const cellKey = createCellKey(address);
-                const layout = getCellLayout(address);
+                const layout = getCellLayout(address, columnLayout, rowLayout);
                 const cell = sheet.getCell(address);
+                const format = sheet.getCellFormat(address);
                 const isActive =
                   activeCell.col === column && activeCell.row === row;
-                const isSelected = selectionContainsAddress(selection, address);
+                const isSelected = selectionContainsAddress(
+                  selection,
+                  address,
+                  columnLayout,
+                  rowLayout
+                );
                 const formulaError = formulaErrors.get(cellKey);
                 const computedValue = computedValues.get(cellKey);
                 const displayValue = getRenderedCellValue({
@@ -1167,13 +1804,19 @@ export function VirtualizedSheet({
 
                 return (
                   <div
-                    className="absolute overflow-hidden border-[var(--border)] border-r border-b px-3 py-2 text-[0.92rem] text-[var(--foreground)] leading-6"
+                    className="absolute overflow-hidden border-[var(--border)] border-r border-b px-3 py-2 text-[0.92rem] leading-6"
                     key={`${row}:${column}`}
                     style={{
-                      backgroundColor: getCellBackgroundColor(
+                      backgroundColor: getCellBackgroundColor({
+                        format,
                         isActive,
-                        isSelected
-                      ),
+                        isSelected,
+                      }),
+                      color: formulaError
+                        ? "#b42318"
+                        : (format?.textColor ?? "var(--foreground)"),
+                      fontStyle: format?.italic ? "italic" : "normal",
+                      fontWeight: format?.bold ? 700 : 400,
                       height: layout.height,
                       left: layout.left,
                       top: layout.top,
@@ -1190,20 +1833,20 @@ export function VirtualizedSheet({
             <div
               className="pointer-events-none absolute rounded-[0.85rem] bg-[rgba(42,118,130,0.07)]"
               style={{
-                height: selectionHeight,
-                left: selectionStartLayout.left,
-                top: selectionStartLayout.top,
-                width: selectionWidth,
+                height: selectionRect.height,
+                left: selectionRect.left,
+                top: selectionRect.top,
+                width: selectionRect.width,
               }}
             />
 
             <div
               className="pointer-events-none absolute rounded-[0.85rem] border-2 border-[var(--accent)] shadow-[0_0_0_1px_rgba(255,255,255,0.9)]"
               style={{
-                height: selectionHeight,
-                left: selectionStartLayout.left,
-                top: selectionStartLayout.top,
-                width: selectionWidth,
+                height: selectionRect.height,
+                left: selectionRect.left,
+                top: selectionRect.top,
+                width: selectionRect.width,
               }}
             />
 
@@ -1221,30 +1864,29 @@ export function VirtualizedSheet({
               const peerActiveCell = peer.activeCell
                 ? parseCellKey(peer.activeCell)
                 : null;
-              const peerSelection = peer.selection
-                ? normalizeRange(
-                    parseCellKey(peer.selection.start),
-                    parseCellKey(peer.selection.end)
-                  )
-                : null;
+              const peerSelection =
+                peer.selection == null
+                  ? null
+                  : createRangeSelection(
+                      parseCellKey(peer.selection.start),
+                      parseCellKey(peer.selection.end)
+                    );
+              const peerSelectionRect =
+                peerSelection == null
+                  ? null
+                  : getSelectionRect(peerSelection, columnLayout, rowLayout);
 
               return (
                 <div key={`peer-overlay-${peer.userId}`}>
-                  {peerSelection ? (
+                  {peerSelectionRect ? (
                     <div
                       className="pointer-events-none absolute rounded-[0.8rem] border-2"
                       style={{
                         borderColor: peer.color,
-                        height:
-                          getCellLayout(peerSelection.end).top -
-                          getCellLayout(peerSelection.start).top +
-                          getCellLayout(peerSelection.end).height,
-                        left: getCellLayout(peerSelection.start).left,
-                        top: getCellLayout(peerSelection.start).top,
-                        width:
-                          getCellLayout(peerSelection.end).left -
-                          getCellLayout(peerSelection.start).left +
-                          getCellLayout(peerSelection.end).width,
+                        height: peerSelectionRect.height,
+                        left: peerSelectionRect.left,
+                        top: peerSelectionRect.top,
+                        width: peerSelectionRect.width,
                       }}
                     />
                   ) : null}
@@ -1253,16 +1895,60 @@ export function VirtualizedSheet({
                       className="pointer-events-none absolute rounded-[0.7rem] border-2"
                       style={{
                         borderColor: peer.color,
-                        height: getCellLayout(peerActiveCell).height,
-                        left: getCellLayout(peerActiveCell).left,
-                        top: getCellLayout(peerActiveCell).top,
-                        width: getCellLayout(peerActiveCell).width,
+                        height: getCellLayout(
+                          peerActiveCell,
+                          columnLayout,
+                          rowLayout
+                        ).height,
+                        left: getCellLayout(
+                          peerActiveCell,
+                          columnLayout,
+                          rowLayout
+                        ).left,
+                        top: getCellLayout(
+                          peerActiveCell,
+                          columnLayout,
+                          rowLayout
+                        ).top,
+                        width: getCellLayout(
+                          peerActiveCell,
+                          columnLayout,
+                          rowLayout
+                        ).width,
                       }}
                     />
                   ) : null}
                 </div>
               );
             })}
+
+            {headerDragState?.type === "reorder" &&
+            headerDragState.axis === "col" ? (
+              <div
+                className="pointer-events-none absolute top-0 bottom-0 z-20 w-[3px] rounded-full bg-[var(--accent)]"
+                style={{
+                  left:
+                    getAxisLayoutByLogicalIndex(
+                      columnLayout,
+                      headerDragState.targetLogicalIndex
+                    ).start - 1,
+                }}
+              />
+            ) : null}
+
+            {headerDragState?.type === "reorder" &&
+            headerDragState.axis === "row" ? (
+              <div
+                className="pointer-events-none absolute right-0 left-0 z-20 h-[3px] rounded-full bg-[var(--accent)]"
+                style={{
+                  top:
+                    getAxisLayoutByLogicalIndex(
+                      rowLayout,
+                      headerDragState.targetLogicalIndex
+                    ).start - 1,
+                }}
+              />
+            ) : null}
 
             {editingAddress && editingSurface === "cell" ? (
               <div

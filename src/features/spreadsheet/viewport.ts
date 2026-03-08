@@ -1,7 +1,11 @@
+import { columnNumberToLetters } from "@/features/spreadsheet/addressing";
 import {
-  assertAddressWithinBounds,
-  columnNumberToLetters,
-} from "@/features/spreadsheet/addressing";
+  createAxisLayouts as createAxisLayoutsInternal,
+  getCellAddressFromPoint as getCellAddressFromPointWithLayout,
+  getCellLayout as getCellLayoutWithLayout,
+  getGridDimensions as getGridDimensionsWithLayout,
+  getViewportFromScroll as getViewportFromScrollBase,
+} from "@/features/spreadsheet/sheet-layout";
 import type {
   CellAddress,
   SheetBounds,
@@ -16,8 +20,8 @@ export const DEFAULT_SHEET_METRICS: SheetMetrics = {
   rowHeight: 46,
 };
 
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
+export function getColumnHeaderLabel(columnNumber: number) {
+  return columnNumberToLetters(columnNumber);
 }
 
 export function getViewportFromScroll(
@@ -27,35 +31,52 @@ export function getViewportFromScroll(
     viewportHeight: number;
     viewportWidth: number;
   },
-  bounds: SheetBounds,
+  bounds?: SheetBounds,
   metrics: SheetMetrics = DEFAULT_SHEET_METRICS
-): Viewport {
-  const safeViewportWidth = Math.max(1, args.viewportWidth);
-  const safeViewportHeight = Math.max(1, args.viewportHeight);
-  const visibleColumnCount = Math.ceil(safeViewportWidth / metrics.colWidth);
-  const visibleRowCount = Math.ceil(safeViewportHeight / metrics.rowHeight);
-  const colStart = clamp(
-    Math.floor(args.scrollX / metrics.colWidth) + 1,
-    1,
-    bounds.colCount
+) {
+  const viewport = getViewportFromScrollBase(args);
+
+  if (!bounds) {
+    return viewport;
+  }
+
+  const { columnLayout, rowLayout } = createAxisLayoutsInternal(
+    bounds,
+    metrics,
+    [],
+    [],
+    new Map(),
+    new Map()
   );
-  const rowStart = clamp(
-    Math.floor(args.scrollY / metrics.rowHeight) + 1,
-    1,
-    bounds.rowCount
-  );
+  const visibleColumns = Math.ceil(viewport.viewportWidth / metrics.colWidth);
+  const visibleRows = Math.ceil(viewport.viewportHeight / metrics.rowHeight);
+  const colStart =
+    columnLayout.logicalToVisual[
+      getCellAddressFromPointWithLayout(
+        { x: args.scrollX, y: 0 },
+        bounds,
+        columnLayout,
+        rowLayout
+      ).col
+    ];
+  const rowStart =
+    rowLayout.logicalToVisual[
+      getCellAddressFromPointWithLayout(
+        { x: 0, y: args.scrollY },
+        bounds,
+        columnLayout,
+        rowLayout
+      ).row
+    ];
 
   return {
-    colEnd: clamp(colStart + visibleColumnCount - 1, 1, bounds.colCount),
+    ...viewport,
+    colEnd: Math.min(bounds.colCount, colStart + visibleColumns - 1),
     colStart,
     overscan: metrics.overscan,
-    rowEnd: clamp(rowStart + visibleRowCount - 1, 1, bounds.rowCount),
+    rowEnd: Math.min(bounds.rowCount, rowStart + visibleRows - 1),
     rowStart,
-    scrollX: args.scrollX,
-    scrollY: args.scrollY,
-    viewportHeight: safeViewportHeight,
-    viewportWidth: safeViewportWidth,
-  };
+  } satisfies Viewport;
 }
 
 export function getCellAddressFromPoint(
@@ -64,39 +85,99 @@ export function getCellAddressFromPoint(
     y: number;
   },
   bounds: SheetBounds,
-  metrics: SheetMetrics = DEFAULT_SHEET_METRICS
+  metricsOrColumnLayout:
+    | SheetMetrics
+    | ReturnType<
+        typeof createAxisLayoutsInternal
+      >["columnLayout"] = DEFAULT_SHEET_METRICS,
+  rowLayout?: ReturnType<typeof createAxisLayoutsInternal>["rowLayout"]
 ) {
-  const address: CellAddress = {
-    col: clamp(Math.floor(point.x / metrics.colWidth) + 1, 1, bounds.colCount),
-    row: clamp(Math.floor(point.y / metrics.rowHeight) + 1, 1, bounds.rowCount),
-  };
+  if ("count" in metricsOrColumnLayout) {
+    return getCellAddressFromPointWithLayout(
+      point,
+      bounds,
+      metricsOrColumnLayout,
+      rowLayout as ReturnType<typeof createAxisLayoutsInternal>["rowLayout"]
+    );
+  }
 
-  assertAddressWithinBounds(address, bounds);
-  return address;
+  const { columnLayout, rowLayout: nextRowLayout } = createAxisLayoutsInternal(
+    bounds,
+    metricsOrColumnLayout,
+    [],
+    [],
+    new Map(),
+    new Map()
+  );
+
+  return getCellAddressFromPointWithLayout(
+    point,
+    bounds,
+    columnLayout,
+    nextRowLayout
+  );
 }
 
 export function getCellLayout(
   address: CellAddress,
-  metrics: SheetMetrics = DEFAULT_SHEET_METRICS
+  metricsOrColumnLayout:
+    | SheetMetrics
+    | ReturnType<
+        typeof createAxisLayoutsInternal
+      >["columnLayout"] = DEFAULT_SHEET_METRICS,
+  rowLayout?: ReturnType<typeof createAxisLayoutsInternal>["rowLayout"]
 ) {
-  return {
-    height: metrics.rowHeight,
-    left: (address.col - 1) * metrics.colWidth,
-    top: (address.row - 1) * metrics.rowHeight,
-    width: metrics.colWidth,
-  };
-}
+  if ("count" in metricsOrColumnLayout) {
+    return getCellLayoutWithLayout(
+      address,
+      metricsOrColumnLayout,
+      rowLayout as ReturnType<typeof createAxisLayoutsInternal>["rowLayout"]
+    );
+  }
 
-export function getColumnHeaderLabel(columnNumber: number) {
-  return columnNumberToLetters(columnNumber);
+  const bounds: SheetBounds = {
+    colCount: address.col,
+    rowCount: address.row,
+  };
+  const { columnLayout, rowLayout: nextRowLayout } = createAxisLayoutsInternal(
+    bounds,
+    metricsOrColumnLayout,
+    [],
+    [],
+    new Map(),
+    new Map()
+  );
+
+  return getCellLayoutWithLayout(address, columnLayout, nextRowLayout);
 }
 
 export function getGridDimensions(
-  bounds: SheetBounds,
-  metrics: SheetMetrics = DEFAULT_SHEET_METRICS
+  boundsOrColumnLayout:
+    | SheetBounds
+    | ReturnType<typeof createAxisLayoutsInternal>["columnLayout"],
+  metricsOrRowLayout:
+    | SheetMetrics
+    | ReturnType<
+        typeof createAxisLayoutsInternal
+      >["rowLayout"] = DEFAULT_SHEET_METRICS
 ) {
-  return {
-    height: bounds.rowCount * metrics.rowHeight,
-    width: bounds.colCount * metrics.colWidth,
-  };
+  if ("count" in boundsOrColumnLayout) {
+    return getGridDimensionsWithLayout(
+      boundsOrColumnLayout,
+      metricsOrRowLayout as ReturnType<
+        typeof createAxisLayoutsInternal
+      >["rowLayout"]
+    );
+  }
+
+  const { columnLayout, rowLayout } = createAxisLayoutsInternal(
+    boundsOrColumnLayout,
+    metricsOrRowLayout as SheetMetrics,
+    [],
+    [],
+    new Map(),
+    new Map()
+  );
+
+  return getGridDimensionsWithLayout(columnLayout, rowLayout);
 }
