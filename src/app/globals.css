@@ -1,21 +1,24 @@
 @import "tailwindcss";
 
 :root {
-  --background: #f4f3ee;
-  --foreground: #16212d;
-  --muted: #5d6975;
-  --accent: #2a7682;
-  --border: rgba(22, 33, 45, 0.11);
-  --panel: rgba(255, 255, 255, 0.82);
+  --background: #eef6ed;
+  --background-strong: #dae8d6;
+  --foreground: #173227;
+  --muted: #64786c;
+  --accent: #80ef80;
+  --accent-soft: rgba(128, 239, 128, 0.14);
+  --border: rgba(23, 50, 39, 0.12);
+  --border-strong: rgba(23, 50, 39, 0.22);
+  --panel: rgba(248, 252, 246, 0.9);
+  --panel-strong: #e4efe2;
+  --highlight: #80ef80;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
-  --font-mono:
-    "IBM Plex Mono", "SFMono-Regular", "SF Mono", Consolas, "Liberation Mono",
-    monospace;
+  --font-sans: var(--font-display);
+  --font-mono: var(--font-body);
 }
 
 * {
@@ -28,12 +31,51 @@ html {
 
 body {
   min-height: 100vh;
-  font-family: var(--font-sans);
+  font-family: var(--font-body);
   color: var(--foreground);
-  background: var(--background);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.65), transparent 26%),
+    var(--background);
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(--font-display);
+  letter-spacing: -0.04em;
 }
 
 a {
   color: inherit;
   text-decoration: none;
+}
+
+::selection {
+  color: var(--background);
+  background: var(--foreground);
+}
+
+@keyframes section-enter {
+  from {
+    opacity: 0;
+    transform: translateY(24px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes drift {
+  from {
+    transform: translate3d(-2%, -1%, 0);
+  }
+
+  to {
+    transform: translate3d(2%, 1%, 0);
+  }
 }
