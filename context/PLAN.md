@@ -70,7 +70,7 @@ This plan is intentionally assignment-focused:
 - [ ] Editor includes:
   - [ ] scrollable grid
   - [ ] numbered rows
-  - [ ] lettered columns
+  - [ ] lettered columnsm
   - [ ] editable cells
 - [ ] Formula support includes at minimum:
   - [ ] basic arithmetic
