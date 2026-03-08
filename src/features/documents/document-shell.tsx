@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useAuth } from "@/features/auth/auth-provider";
 import { VirtualizedSheet } from "@/features/spreadsheet/virtualized-sheet";
-import { getDocumentById } from "@/lib/instantdb/metadata-store";
+import { getDocumentById } from "@/lib/metadata/metadata-store";
 import type { DocumentMeta } from "@/types/metadata";
 import type { WriteState } from "@/types/ui";
 

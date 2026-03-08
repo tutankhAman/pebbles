@@ -43,7 +43,7 @@ import {
   getGridDimensions,
   getViewportFromScroll,
 } from "@/features/spreadsheet/viewport";
-import { touchDocument } from "@/lib/instantdb/metadata-store";
+import { touchDocument } from "@/lib/metadata/metadata-store";
 import type { DocumentMeta, SessionIdentity } from "@/types/metadata";
 import type {
   CellAddress,

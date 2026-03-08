@@ -16,7 +16,7 @@ import {
   signInWithGooglePopup,
   signOutFirebaseUser,
 } from "@/lib/firebase/client";
-import { upsertUserMeta } from "@/lib/instantdb/metadata-store";
+import { upsertUserMeta } from "@/lib/metadata/metadata-store";
 import type { SessionIdentity } from "@/types/metadata";
 
 const GUEST_STORAGE_KEY = "pebbles:guest-identity";

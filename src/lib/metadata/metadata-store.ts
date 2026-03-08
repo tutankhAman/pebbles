@@ -1,9 +1,9 @@
 "use client";
 
-import { isInstantConfigured } from "@/lib/instantdb/client";
 import type { DocumentMeta, SessionIdentity, UserMeta } from "@/types/metadata";
 
 const METADATA_POLL_INTERVAL_MS = 2000;
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "";
 
 interface DocumentDraft {
   title?: string;
@@ -25,8 +25,8 @@ async function parseJsonResponse<T>(response: Response) {
   return (await response.json()) as T;
 }
 
-async function requestMetadata<T>(input: RequestInfo, init?: RequestInit) {
-  const response = await fetch(input, {
+async function requestMetadata<T>(path: string, init?: RequestInit) {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
     cache: "no-store",
     ...init,
     headers: {
@@ -39,17 +39,15 @@ async function requestMetadata<T>(input: RequestInfo, init?: RequestInit) {
 }
 
 export function getMetadataDriverLabel() {
-  return isInstantConfigured()
-    ? "shared-file-api (instant configured)"
-    : "shared-file-api";
+  return "cloudflare-do";
 }
 
 export function listDocuments() {
-  return requestMetadata<DocumentMeta[]>("/api/metadata/documents");
+  return requestMetadata<DocumentMeta[]>("/api/documents");
 }
 
 export async function getDocumentById(documentId: string) {
-  const response = await fetch(`/api/metadata/documents/${documentId}`, {
+  const response = await fetch(`${API_BASE_URL}/api/documents/${documentId}`, {
     cache: "no-store",
   });
 
@@ -64,16 +62,13 @@ export async function createDocument(
   owner: SessionIdentity,
   draft: DocumentDraft = {}
 ) {
-  const document = await requestMetadata<DocumentMeta>(
-    "/api/metadata/documents",
-    {
-      body: JSON.stringify({
-        draft,
-        owner,
-      }),
-      method: "POST",
-    }
-  );
+  const document = await requestMetadata<DocumentMeta>("/api/documents", {
+    body: JSON.stringify({
+      draft,
+      owner,
+    }),
+    method: "POST",
+  });
 
   notifyMetadataChanged();
   return document;
@@ -81,7 +76,7 @@ export async function createDocument(
 
 export async function renameDocument(documentId: string, title: string) {
   const document = await requestMetadata<DocumentMeta>(
-    `/api/metadata/documents/${documentId}`,
+    `/api/documents/${documentId}`,
     {
       body: JSON.stringify({
         title,
@@ -96,7 +91,7 @@ export async function renameDocument(documentId: string, title: string) {
 
 export async function touchDocument(documentId: string) {
   const document = await requestMetadata<DocumentMeta>(
-    `/api/metadata/documents/${documentId}`,
+    `/api/documents/${documentId}`,
     {
       body: JSON.stringify({
         touch: true,
@@ -110,7 +105,7 @@ export async function touchDocument(documentId: string) {
 }
 
 export async function upsertUserMeta(user: UserMeta) {
-  await requestMetadata<{ ok: true }>("/api/metadata/users", {
+  await requestMetadata<{ ok: true }>("/api/users", {
     body: JSON.stringify(user),
     method: "POST",
   });

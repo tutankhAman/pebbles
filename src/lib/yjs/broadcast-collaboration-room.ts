@@ -24,7 +24,7 @@ const REMOTE_AWARENESS_ORIGIN = "pebbles-remote-awareness";
 const REMOTE_SYNC_ORIGIN = "pebbles-remote-sync";
 const TRAILING_SLASH_PATTERN = /\/$/;
 const STATUS_SETTLE_DELAY_MS = 180;
-const WEBSOCKET_BASE_URL = process.env.NEXT_PUBLIC_COLLAB_WS_URL;
+const WEBSOCKET_BASE_URL = process.env.NEXT_PUBLIC_API_URL;
 const YJS_SYNC_ORIGIN = "pebbles-broadcast-sync";
 
 type BroadcastMessage =
@@ -469,7 +469,7 @@ export class BroadcastCollaborationRoom {
   private getRemoteTransportUrl() {
     const url = new URL(WEBSOCKET_BASE_URL as string);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-    url.pathname = `${url.pathname.replace(TRAILING_SLASH_PATTERN, "")}/rooms/${this.roomId}`;
+    url.pathname = `${url.pathname.replace(TRAILING_SLASH_PATTERN, "")}/ws/rooms/${this.roomId}`;
 
     url.searchParams.set("clientId", String(this.doc.clientID));
     url.searchParams.set("color", this.session.color);

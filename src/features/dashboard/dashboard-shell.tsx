@@ -15,7 +15,7 @@ import {
   getMetadataDriverLabel,
   listDocuments,
   subscribeToMetadataChanges,
-} from "@/lib/instantdb/metadata-store";
+} from "@/lib/metadata/metadata-store";
 import type { DocumentMeta } from "@/types/metadata";
 
 function formatTimestamp(value: number) {
