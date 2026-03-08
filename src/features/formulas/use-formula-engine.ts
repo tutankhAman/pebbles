@@ -14,6 +14,7 @@ import {
 } from "@/features/formulas/formula-worker-client";
 import type {
   FormulaWorkerCellInput,
+  FormulaWorkerRequest,
   FormulaWorkerResponse,
 } from "@/types/formula-worker";
 import type { ComputedValue, SheetBounds } from "@/types/spreadsheet";
@@ -56,6 +57,7 @@ export function useFormulaEngine(args: {
   visibleKeys: string[];
 }) {
   const workerRef = useRef<Worker | null>(null);
+  const queuedRequestsRef = useRef<FormulaWorkerRequest[]>([]);
   const [isReady, setIsReady] = useState(false);
   const [computedValues, setComputedValues] = useState<
     Map<string, ComputedValue>
@@ -122,6 +124,14 @@ export function useFormulaEngine(args: {
       return;
     }
 
+    if (queuedRequestsRef.current.length > 0) {
+      for (const request of queuedRequestsRef.current) {
+        postFormulaWorkerRequest(workerRef.current, request);
+      }
+
+      queuedRequestsRef.current = [];
+    }
+
     postFormulaWorkerRequest(workerRef.current, {
       keys: args.visibleKeys,
       type: "recompute-visible",
@@ -130,38 +140,59 @@ export function useFormulaEngine(args: {
 
   return {
     batchUpsert: (cells: FormulaWorkerCellInput[]) => {
-      if (!(isReady && workerRef.current && cells.length > 0)) {
+      if (!(workerRef.current && cells.length > 0)) {
         return;
       }
 
-      postFormulaWorkerRequest(workerRef.current, {
+      const request: FormulaWorkerRequest = {
         cells,
         type: "batch-upsert",
-      });
+      };
+
+      if (isReady) {
+        postFormulaWorkerRequest(workerRef.current, request);
+        return;
+      }
+
+      queuedRequestsRef.current.push(request);
     },
     computedValues,
     deleteCell: (key: string) => {
-      if (!(isReady && workerRef.current)) {
+      if (!workerRef.current) {
         return;
       }
 
-      postFormulaWorkerRequest(workerRef.current, {
+      const request: FormulaWorkerRequest = {
         key,
         type: "cell-delete",
-      });
+      };
+
+      if (isReady) {
+        postFormulaWorkerRequest(workerRef.current, request);
+        return;
+      }
+
+      queuedRequestsRef.current.push(request);
     },
     formulaErrors,
     isReady,
     upsertCell: (cell: FormulaWorkerCellInput) => {
-      if (!(isReady && workerRef.current)) {
+      if (!workerRef.current) {
         return;
       }
 
-      postFormulaWorkerRequest(workerRef.current, {
+      const request: FormulaWorkerRequest = {
         key: cell.key,
         raw: cell.raw,
         type: "cell-upsert",
-      });
+      };
+
+      if (isReady) {
+        postFormulaWorkerRequest(workerRef.current, request);
+        return;
+      }
+
+      queuedRequestsRef.current.push(request);
     },
   };
 }

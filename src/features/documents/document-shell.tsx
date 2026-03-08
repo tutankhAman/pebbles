@@ -123,6 +123,7 @@ export function DocumentShell({ documentId }: { documentId: string }) {
           <VirtualizedSheet
             document={document}
             onWriteStateChange={setWriteState}
+            session={session}
           />
         </div>
       </div>

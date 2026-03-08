@@ -76,10 +76,18 @@ export class SparseSheet {
     return nextCell;
   }
 
+  setCellByKey(cellKey: string, content: CellContent | string) {
+    return this.setCell(parseCellKey(cellKey), content);
+  }
+
   clearCell(address: CellAddress) {
     assertAddressWithinBounds(address, this.bounds);
     const cellKey = createCellKey(address);
     return this.cells.delete(cellKey);
+  }
+
+  clearCellByKey(cellKey: string) {
+    return this.clearCell(parseCellKey(cellKey));
   }
 
   getCell(address: CellAddress) {
