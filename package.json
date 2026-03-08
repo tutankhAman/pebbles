@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "collab:server": "bun run server/collab/collaboration-server.mjs",
     "start": "next start",
     "test": "bun test",
     "typecheck": "tsc --noEmit",

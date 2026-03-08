@@ -19,6 +19,9 @@
 
 # production
 /build
+.collab-data/
+.data/
+.data/collab-rooms/
 
 # misc
 .DS_Store

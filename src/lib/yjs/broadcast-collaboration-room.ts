@@ -10,12 +10,21 @@ import {
   loadPersistedRoomState,
   persistRoomState,
 } from "@/lib/yjs/room-persistence";
+import {
+  decodeTransportFrame,
+  encodeTransportFrame,
+  TRANSPORT_MESSAGE_TYPE,
+} from "@/lib/yjs/transport-protocol";
 import type { CollaborationStatus, PresenceState } from "@/types/collaboration";
 import type { SessionIdentity } from "@/types/metadata";
 import type { CellRecord } from "@/types/spreadsheet";
 
 const ROOM_CHANNEL_PREFIX = "pebbles-room:";
+const REMOTE_AWARENESS_ORIGIN = "pebbles-remote-awareness";
+const REMOTE_SYNC_ORIGIN = "pebbles-remote-sync";
+const TRAILING_SLASH_PATTERN = /\/$/;
 const STATUS_SETTLE_DELAY_MS = 180;
+const WEBSOCKET_BASE_URL = process.env.NEXT_PUBLIC_COLLAB_WS_URL;
 const YJS_SYNC_ORIGIN = "pebbles-broadcast-sync";
 
 type BroadcastMessage =
@@ -83,9 +92,13 @@ export class BroadcastCollaborationRoom {
   private readonly roomId: string;
   private readonly senderId = nextSenderId();
   private readonly session: SessionIdentity;
+  private isDestroyed = false;
   private lastRemoteLatencyMs: number | null = null;
   private reconnectTimerId: number | null = null;
   private snapshot: CollaborationSnapshot;
+  private socket: WebSocket | null = null;
+  private socketReconnectAttempt = 0;
+  private socketReconnectTimerId: number | null = null;
   private status: CollaborationStatus = "connecting";
 
   constructor(args: {
@@ -107,12 +120,13 @@ export class BroadcastCollaborationRoom {
     this.bindWindowStatus();
 
     this.awareness.setLocalState(createLocalPresence(args.session));
-    this.status = navigator.onLine ? "connected" : "offline";
+    this.status = this.getInitialStatus();
     this.notify();
     this.channel.postMessage({
       senderId: this.senderId,
       type: "sync-request",
     } satisfies BroadcastMessage);
+    this.connectRemoteTransport();
   }
 
   batchUpsert(
@@ -149,13 +163,19 @@ export class BroadcastCollaborationRoom {
   }
 
   destroy() {
+    this.isDestroyed = true;
     this.listeners.clear();
     this.channel.close();
+    this.socket?.close();
     this.awareness.destroy();
     this.doc.destroy();
 
     if (this.reconnectTimerId !== null) {
       window.clearTimeout(this.reconnectTimerId);
+    }
+
+    if (this.socketReconnectTimerId !== null) {
+      window.clearTimeout(this.socketReconnectTimerId);
     }
   }
 
@@ -208,7 +228,11 @@ export class BroadcastCollaborationRoom {
           return;
         }
 
-        if (origin !== this) {
+        if (
+          origin !== REMOTE_AWARENESS_ORIGIN &&
+          origin !== YJS_SYNC_ORIGIN &&
+          origin !== this
+        ) {
           const update = encodeAwarenessUpdate(this.awareness, changedClients);
 
           this.channel.postMessage({
@@ -216,6 +240,7 @@ export class BroadcastCollaborationRoom {
             type: "awareness-update",
             update,
           } satisfies BroadcastMessage);
+          this.sendRemoteFrame(TRANSPORT_MESSAGE_TYPE.awarenessUpdate, update);
         }
 
         this.notify();
@@ -233,7 +258,7 @@ export class BroadcastCollaborationRoom {
 
       switch (message.type) {
         case "awareness-update":
-          applyAwarenessUpdate(this.awareness, message.update, this);
+          applyAwarenessUpdate(this.awareness, message.update, YJS_SYNC_ORIGIN);
           this.notify();
           break;
         case "sync-request":
@@ -257,12 +282,13 @@ export class BroadcastCollaborationRoom {
     this.doc.on("update", (update: Uint8Array, origin: unknown) => {
       persistRoomState(this.roomId, encodeStateAsUpdate(this.doc));
 
-      if (origin !== YJS_SYNC_ORIGIN) {
+      if (!(origin === YJS_SYNC_ORIGIN || origin === REMOTE_SYNC_ORIGIN)) {
         this.channel.postMessage({
           senderId: this.senderId,
           type: "yjs-update",
           update,
         } satisfies BroadcastMessage);
+        this.sendRemoteFrame(TRANSPORT_MESSAGE_TYPE.yjsUpdate, update);
       }
 
       this.lastRemoteLatencyMs = this.computeRemoteLatency();
@@ -273,20 +299,22 @@ export class BroadcastCollaborationRoom {
   private bindWindowStatus() {
     const handleOffline = () => {
       this.status = "offline";
+      this.socket?.close();
       this.notify();
     };
 
     const handleOnline = () => {
-      this.status = "reconnecting";
-      this.notify();
+      this.setStatus(this.hasRemoteTransport() ? "reconnecting" : "connected");
+      this.connectRemoteTransport();
 
       if (this.reconnectTimerId !== null) {
         window.clearTimeout(this.reconnectTimerId);
       }
 
       this.reconnectTimerId = window.setTimeout(() => {
-        this.status = "connected";
-        this.notify();
+        if (!this.hasRemoteTransport()) {
+          this.setStatus("connected");
+        }
       }, STATUS_SETTLE_DELAY_MS);
     };
 
@@ -299,6 +327,64 @@ export class BroadcastCollaborationRoom {
     };
 
     this.doc.on("destroy", teardown);
+  }
+
+  private connectRemoteTransport() {
+    if (!(this.hasRemoteTransport() && navigator.onLine) || this.socket) {
+      return;
+    }
+
+    const socket = new WebSocket(this.getRemoteTransportUrl());
+    socket.binaryType = "arraybuffer";
+    this.socket = socket;
+
+    socket.onopen = () => {
+      this.socketReconnectAttempt = 0;
+      this.setStatus("connected");
+      this.sendRemoteFrame(
+        TRANSPORT_MESSAGE_TYPE.syncState,
+        encodeStateAsUpdate(this.doc)
+      );
+      this.sendCurrentAwareness();
+    };
+
+    socket.onmessage = (event) => {
+      const frame = decodeTransportFrame(event.data);
+
+      switch (frame.type) {
+        case TRANSPORT_MESSAGE_TYPE.syncState:
+        case TRANSPORT_MESSAGE_TYPE.yjsUpdate:
+          applyUpdate(this.doc, frame.payload, REMOTE_SYNC_ORIGIN);
+          break;
+        case TRANSPORT_MESSAGE_TYPE.awarenessUpdate:
+          applyAwarenessUpdate(
+            this.awareness,
+            frame.payload,
+            REMOTE_AWARENESS_ORIGIN
+          );
+          this.notify();
+          break;
+        default:
+          break;
+      }
+    };
+
+    socket.onerror = () => {
+      socket.close();
+    };
+
+    socket.onclose = () => {
+      if (this.socket === socket) {
+        this.socket = null;
+      }
+
+      if (
+        !(this.isDestroyed || !navigator.onLine || !this.hasRemoteTransport())
+      ) {
+        this.setStatus("reconnecting");
+        this.scheduleRemoteReconnect();
+      }
+    };
   }
 
   private computeRemoteLatency() {
@@ -339,12 +425,80 @@ export class BroadcastCollaborationRoom {
     };
   }
 
+  private getInitialStatus() {
+    if (!navigator.onLine) {
+      return "offline";
+    }
+
+    return this.hasRemoteTransport() ? "connecting" : "connected";
+  }
+
+  private getRemoteTransportUrl() {
+    const url = new URL(WEBSOCKET_BASE_URL as string);
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    url.pathname = `${url.pathname.replace(TRAILING_SLASH_PATTERN, "")}/rooms/${this.roomId}`;
+
+    url.searchParams.set("clientId", String(this.doc.clientID));
+    url.searchParams.set("color", this.session.color);
+    url.searchParams.set("displayName", this.session.displayName);
+    url.searchParams.set("userId", this.session.userId);
+
+    return url.toString();
+  }
+
+  private hasRemoteTransport() {
+    return typeof WEBSOCKET_BASE_URL === "string" && WEBSOCKET_BASE_URL !== "";
+  }
+
   private hydratePersistedState() {
     const persistedUpdate = loadPersistedRoomState(this.roomId);
 
     if (persistedUpdate) {
       applyUpdate(this.doc, persistedUpdate, YJS_SYNC_ORIGIN);
     }
+  }
+
+  private scheduleRemoteReconnect() {
+    if (this.socketReconnectTimerId !== null) {
+      window.clearTimeout(this.socketReconnectTimerId);
+    }
+
+    const attempt = this.socketReconnectAttempt + 1;
+    this.socketReconnectAttempt = attempt;
+
+    const delay = Math.min(1500, 150 * 2 ** (attempt - 1));
+
+    this.socketReconnectTimerId = window.setTimeout(() => {
+      this.socketReconnectTimerId = null;
+      this.connectRemoteTransport();
+    }, delay);
+  }
+
+  private sendCurrentAwareness() {
+    const localState = this.awareness.getLocalState();
+
+    if (!localState) {
+      return;
+    }
+
+    const update = encodeAwarenessUpdate(this.awareness, [this.doc.clientID]);
+    this.sendRemoteFrame(TRANSPORT_MESSAGE_TYPE.awarenessUpdate, update);
+  }
+
+  private sendRemoteFrame(
+    type: (typeof TRANSPORT_MESSAGE_TYPE)[keyof typeof TRANSPORT_MESSAGE_TYPE],
+    payload: Uint8Array
+  ) {
+    if (this.socket?.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    this.socket.send(encodeTransportFrame(type, payload));
+  }
+
+  private setStatus(nextStatus: CollaborationStatus) {
+    this.status = nextStatus;
+    this.notify();
   }
 
   private notify() {
