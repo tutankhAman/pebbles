@@ -28,9 +28,11 @@ interface CollaboratorBarProps {
 
 interface CollaboratorSummary {
   activeCell: string | null;
+  clientId?: number;
   color: string;
   displayName: string;
   isCurrentUser: boolean;
+  presenceKey: string;
   selection?: PresenceState["selection"];
   userId: string;
 }
@@ -86,39 +88,52 @@ function getSelectedCellLabel(collaborator: CollaboratorSummary) {
   return collaborator.activeCell ?? "No active cell";
 }
 
+function createPresenceKey(
+  presence: Pick<PresenceState, "clientId" | "userId">,
+  prefix: "peer" | "self"
+) {
+  return `${prefix}:${presence.clientId ?? presence.userId}`;
+}
+
 function createCollaboratorList(args: CollaboratorBarProps) {
-  const collaboratorIds = new Set<string>();
+  const collaboratorKeys = new Set<string>();
   const collaborators: CollaboratorSummary[] = args.session
-    ? [
-        {
-          activeCell: args.collaboration.activeCell,
-          color: args.session.color,
-          displayName: args.session.displayName,
-          isCurrentUser: true,
-          userId: args.session.userId,
-        },
-      ]
+    ? (() => {
+        const presenceKey = createPresenceKey(args.session, "self");
+        collaboratorKeys.add(presenceKey);
+
+        return [
+          {
+            activeCell: args.collaboration.activeCell,
+            color: args.session.color,
+            displayName: args.session.displayName,
+            isCurrentUser: true,
+            presenceKey,
+            userId: args.session.userId,
+          },
+        ];
+      })()
     : [];
 
-  if (args.session) {
-    collaboratorIds.add(args.session.userId);
-  }
-
   for (const peer of args.collaboration.peers) {
+    const presenceKey = createPresenceKey(peer, "peer");
+
     if (
       peer.userId.trim() === "" ||
       peer.displayName.trim() === "" ||
-      collaboratorIds.has(peer.userId)
+      collaboratorKeys.has(presenceKey)
     ) {
       continue;
     }
 
-    collaboratorIds.add(peer.userId);
+    collaboratorKeys.add(presenceKey);
     collaborators.push({
       activeCell: peer.activeCell ?? null,
+      clientId: peer.clientId,
       color: peer.color,
       displayName: peer.displayName,
       isCurrentUser: false,
+      presenceKey,
       selection: peer.selection,
       userId: peer.userId,
     });
@@ -131,7 +146,7 @@ export function CollaboratorBar({
   collaboration,
   session,
 }: CollaboratorBarProps) {
-  const [openCollaboratorId, setOpenCollaboratorId] = useState<string | null>(
+  const [openCollaboratorKey, setOpenCollaboratorKey] = useState<string | null>(
     null
   );
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -143,7 +158,7 @@ export function CollaboratorBar({
   const statusDotClassName = getStatusDotClassName(collaboration.status);
 
   useEffect(() => {
-    if (openCollaboratorId == null) {
+    if (openCollaboratorKey == null) {
       return;
     }
 
@@ -152,12 +167,12 @@ export function CollaboratorBar({
         event.target instanceof Node &&
         !rootRef.current?.contains(event.target)
       ) {
-        setOpenCollaboratorId(null);
+        setOpenCollaboratorKey(null);
       }
     };
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        setOpenCollaboratorId(null);
+        setOpenCollaboratorKey(null);
       }
     };
 
@@ -168,18 +183,18 @@ export function CollaboratorBar({
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("pointerdown", handlePointerDown);
     };
-  }, [openCollaboratorId]);
+  }, [openCollaboratorKey]);
 
   useEffect(() => {
     if (
-      openCollaboratorId &&
+      openCollaboratorKey &&
       !collaborators.some(
-        (collaborator) => collaborator.userId === openCollaboratorId
+        (collaborator) => collaborator.presenceKey === openCollaboratorKey
       )
     ) {
-      setOpenCollaboratorId(null);
+      setOpenCollaboratorKey(null);
     }
-  }, [collaborators, openCollaboratorId]);
+  }, [collaborators, openCollaboratorKey]);
 
   return (
     <div
@@ -198,13 +213,13 @@ export function CollaboratorBar({
 
         <div className="flex min-w-0 items-center overflow-visible pr-1">
           {collaborators.map((collaborator) => {
-            const isOpen = collaborator.userId === openCollaboratorId;
+            const isOpen = collaborator.presenceKey === openCollaboratorKey;
             const selectedCellLabel = getSelectedCellLabel(collaborator);
 
             return (
               <div
                 className="relative -ml-1.5 first:ml-0"
-                key={collaborator.userId}
+                key={collaborator.presenceKey}
               >
                 <button
                   aria-expanded={isOpen}
@@ -214,10 +229,10 @@ export function CollaboratorBar({
                     isOpen ? "z-20 scale-[1.04]" : "z-0"
                   }`}
                   onClick={() => {
-                    setOpenCollaboratorId((currentValue) =>
-                      currentValue === collaborator.userId
+                    setOpenCollaboratorKey((currentValue) =>
+                      currentValue === collaborator.presenceKey
                         ? null
-                        : collaborator.userId
+                        : collaborator.presenceKey
                     );
                   }}
                   onPointerDown={(event) => {

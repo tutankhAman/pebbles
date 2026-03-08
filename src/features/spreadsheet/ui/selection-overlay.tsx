@@ -123,7 +123,7 @@ function PeerCursorOverlays({
             activeCell={peerActiveCell}
             color={peer.color}
             columnLayout={columnLayout}
-            key={`peer-overlay-${peer.userId}`}
+            key={`peer-overlay-${peer.clientId ?? peer.userId}`}
             rowLayout={rowLayout}
             selectionRect={peerSelectionRect}
           />

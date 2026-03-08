@@ -1,5 +1,6 @@
 export interface PresenceState {
   activeCell?: string;
+  clientId?: number;
   color: string;
   displayName: string;
   selection?: {

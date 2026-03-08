@@ -98,6 +98,10 @@ function isPresenceState(value: unknown): value is PresenceState {
 
   const candidate = value as Partial<PresenceState>;
 
+  if (candidate.clientId != null && !Number.isSafeInteger(candidate.clientId)) {
+    return false;
+  }
+
   if (
     typeof candidate.color !== "string" ||
     typeof candidate.displayName !== "string" ||
@@ -121,6 +125,26 @@ function isPresenceState(value: unknown): value is PresenceState {
     typeof candidate.selection.start === "string" &&
     typeof candidate.selection.end === "string"
   );
+}
+
+export function projectPeerPresence(args: {
+  localClientId: number;
+  states: Map<number, unknown>;
+}) {
+  const peers: PresenceState[] = [];
+
+  for (const [clientId, state] of args.states) {
+    if (clientId === args.localClientId || !isPresenceState(state)) {
+      continue;
+    }
+
+    peers.push({
+      ...state,
+      clientId,
+    });
+  }
+
+  return peers;
 }
 
 function getCellKind(raw: string): CellRecord["kind"] {
@@ -616,21 +640,10 @@ export class BroadcastCollaborationRoom {
   }
 
   private createSnapshot(): CollaborationSnapshot {
-    const peerIds = new Set<string>();
-    const peers = Array.from(this.awareness.getStates().values()).flatMap(
-      (state): PresenceState[] => {
-        if (!isPresenceState(state)) {
-          return [];
-        }
-
-        if (state.userId === this.session.userId || peerIds.has(state.userId)) {
-          return [];
-        }
-
-        peerIds.add(state.userId);
-        return [state];
-      }
-    );
+    const peers = projectPeerPresence({
+      localClientId: this.doc.clientID,
+      states: this.awareness.getStates(),
+    });
 
     return {
       changeSource: this.snapshotChangeSource,
