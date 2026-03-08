@@ -22,6 +22,13 @@ interface CollaborationCellChange {
   value: CellRecord | null;
 }
 
+const EMPTY_SNAPSHOT = {
+  lastRemoteLatencyMs: null,
+  peers: [] as PresenceState[],
+  status: "idle" as const,
+  values: new Map<string, CellRecord>(),
+};
+
 function noopUnsubscribe() {
   // Intentional no-op when the room is not available yet.
 }
@@ -73,15 +80,6 @@ function areCellRecordsEqual(
   );
 }
 
-function createEmptySnapshot() {
-  return {
-    lastRemoteLatencyMs: null,
-    peers: [] as PresenceState[],
-    status: "idle" as const,
-    values: new Map<string, CellRecord>(),
-  };
-}
-
 export function useCollaborationRoom(args: {
   initialCells: Array<{
     key: string;
@@ -107,8 +105,8 @@ export function useCollaborationRoom(args: {
 
   const snapshot = useSyncExternalStore(
     (listener) => room?.subscribe(listener) ?? noopUnsubscribe,
-    () => room?.getSnapshot() ?? createEmptySnapshot(),
-    createEmptySnapshot
+    () => room?.getSnapshot() ?? EMPTY_SNAPSHOT,
+    () => EMPTY_SNAPSHOT
   );
 
   useEffect(() => {

@@ -85,6 +85,7 @@ export class BroadcastCollaborationRoom {
   private readonly session: SessionIdentity;
   private lastRemoteLatencyMs: number | null = null;
   private reconnectTimerId: number | null = null;
+  private snapshot: CollaborationSnapshot;
   private status: CollaborationStatus = "connecting";
 
   constructor(args: {
@@ -97,6 +98,7 @@ export class BroadcastCollaborationRoom {
     this.cells = this.doc.getMap<CellRecord>("cells");
     this.awareness = new Awareness(this.doc);
     this.channel = new BroadcastChannel(createChannelName(args.roomId));
+    this.snapshot = this.createSnapshot();
 
     this.hydratePersistedState();
     this.bindDocUpdates();
@@ -158,20 +160,7 @@ export class BroadcastCollaborationRoom {
   }
 
   getSnapshot(): CollaborationSnapshot {
-    const peers = Array.from(this.awareness.getStates().values())
-      .map((state) => state as PresenceState)
-      .filter((state) => state.userId !== this.session.userId);
-
-    return {
-      lastRemoteLatencyMs: this.lastRemoteLatencyMs,
-      peers,
-      status: this.status,
-      values: new Map(
-        Array.from(this.cells.entries()).flatMap(([key, value]) =>
-          value ? [[key, value] as const] : []
-        )
-      ),
-    };
+    return this.snapshot;
   }
 
   setPresence(nextPresence: Partial<PresenceState>) {
@@ -333,6 +322,23 @@ export class BroadcastCollaborationRoom {
     return nextLatency;
   }
 
+  private createSnapshot(): CollaborationSnapshot {
+    const peers = Array.from(this.awareness.getStates().values())
+      .map((state) => state as PresenceState)
+      .filter((state) => state.userId !== this.session.userId);
+
+    return {
+      lastRemoteLatencyMs: this.lastRemoteLatencyMs,
+      peers,
+      status: this.status,
+      values: new Map(
+        Array.from(this.cells.entries()).flatMap(([key, value]) =>
+          value ? [[key, value] as const] : []
+        )
+      ),
+    };
+  }
+
   private hydratePersistedState() {
     const persistedUpdate = loadPersistedRoomState(this.roomId);
 
@@ -342,6 +348,8 @@ export class BroadcastCollaborationRoom {
   }
 
   private notify() {
+    this.snapshot = this.createSnapshot();
+
     for (const listener of this.listeners) {
       listener();
     }
