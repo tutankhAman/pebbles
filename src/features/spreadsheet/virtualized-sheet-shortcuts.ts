@@ -230,7 +230,7 @@ export interface NavigationHandlerArgs {
   event: KeyboardEvent<KeyboardTargetElement>;
   rowLayout: AxisLayout;
   selection: Selection;
-  startEditing: (address: CellAddress, initialValue?: string) => void;
+  startTypingEdit: (address: CellAddress, initialValue: string) => void;
 }
 
 export function handleNavigationShortcuts(args: NavigationHandlerArgs) {
@@ -274,7 +274,7 @@ export function handleNavigationShortcuts(args: NavigationHandlerArgs) {
 
   if (isPrintableCellInput(args.event)) {
     args.event.preventDefault();
-    args.startEditing(args.activeCell, args.event.key);
+    args.startTypingEdit(args.activeCell, args.event.key);
     return true;
   }
 
