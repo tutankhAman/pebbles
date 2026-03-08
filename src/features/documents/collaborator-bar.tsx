@@ -38,10 +38,7 @@ interface CollaboratorSummary {
 function createAvatarDataUri(seed: string) {
   return createAvatar(thumbs, {
     backgroundColor: [...AVATAR_BACKGROUND_COLORS],
-    eyesColor: ["ffffff"],
-    mouthColor: ["ffffff"],
     seed,
-    shapeColor: ["0b57d0", "1a73e8", "188038", "b06000", "b3261e"],
   }).toDataUri();
 }
 

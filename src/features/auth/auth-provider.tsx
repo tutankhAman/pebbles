@@ -57,7 +57,7 @@ function AuthOnboardingModal() {
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(128,239,128,0.3),transparent_30%),radial-gradient(circle_at_82%_18%,rgba(190,214,181,0.48),transparent_26%)]" />
 
           <div className="relative grid max-h-[inherit] overflow-y-auto xl:grid-cols-[minmax(0,1.1fr)_minmax(24rem,0.9fr)]">
-            <section className="fluid-panel flex min-h-0 flex-col justify-between border-[var(--border)] border-b xl:border-r xl:border-b-0">
+            <section className="fluid-panel hidden min-h-0 flex-col justify-between border-[var(--border)] border-b xl:flex xl:border-r xl:border-b-0">
               <div className="space-y-[clamp(1.75rem,2vw,3rem)]">
                 <div className="fluid-overline flex flex-wrap items-center gap-3 text-[var(--muted)] uppercase">
                   <span className="border border-[var(--border-strong)] px-3 py-2 text-[var(--foreground)]">
@@ -118,20 +118,23 @@ function AuthOnboardingModal() {
               </div>
             </section>
 
-            <section className="fluid-panel bg-[linear-gradient(180deg,rgba(228,239,226,0.82),rgba(248,252,246,0.96))]">
+            <section className="fluid-panel bg-[linear-gradient(180deg,rgba(228,239,226,0.82),rgba(248,252,246,0.96))] px-4 py-4 sm:px-[clamp(1.25rem,1.8vw,2.5rem)] sm:py-[clamp(1.25rem,1.8vw,2.5rem)]">
               <div className="border border-[var(--border-strong)] bg-[rgba(248,252,246,0.9)] shadow-[0_20px_60px_rgba(23,50,39,0.08)]">
-                <div className="fluid-panel-tight border-[var(--border)] border-b">
+                <div className="sm:fluid-panel-tight border-[var(--border)] border-b px-4 py-4">
                   <p className="fluid-label text-[var(--muted)] uppercase">
                     Access
                   </p>
-                  <h3 className="fluid-title mt-3">
+                  <h3 className="sm:fluid-title mt-2 text-[1.1rem] leading-tight sm:mt-3">
                     Pick how this browser should appear in collaborative rooms.
                   </h3>
+                  <p className="mt-2 text-[0.8rem] text-[var(--muted)] leading-5 sm:hidden">
+                    Add a name or continue with Google.
+                  </p>
                 </div>
 
-                <div className="fluid-panel-tight space-y-[clamp(1rem,1.4vw,1.6rem)]">
-                  <div className="space-y-3">
-                    <p className="fluid-label text-[var(--muted)] uppercase">
+                <div className="sm:fluid-panel-tight space-y-4 px-4 py-4 sm:space-y-[clamp(1rem,1.4vw,1.6rem)]">
+                  <div className="space-y-2 sm:space-y-3">
+                    <p className="fluid-label hidden text-[var(--muted)] uppercase sm:block">
                       Guest access
                     </p>
                     <label className="block" htmlFor={formId}>
@@ -144,7 +147,7 @@ function AuthOnboardingModal() {
                         value={displayName}
                       />
                     </label>
-                    <p className="fluid-body-tight text-[var(--muted)]">
+                    <p className="fluid-body-tight hidden text-[var(--muted)] sm:block">
                       Use a clear name so selections, edits, and presence badges
                       remain readable to everyone in the sheet.
                     </p>
@@ -184,7 +187,7 @@ function AuthOnboardingModal() {
                       : "Google sign-in unavailable"}
                   </button>
 
-                  <div className="border border-[var(--border)] bg-[rgba(255,255,255,0.56)] px-[clamp(1rem,1.2vw,1.35rem)] py-[clamp(0.9rem,1vw,1.15rem)]">
+                  <div className="hidden border border-[var(--border)] bg-[rgba(255,255,255,0.56)] px-[clamp(1rem,1.2vw,1.35rem)] py-[clamp(0.9rem,1vw,1.15rem)] sm:block">
                     <p className="fluid-body-tight text-[var(--muted)]">
                       Direct document joins stay blocked until identity is
                       selected, so every room session starts with a real
