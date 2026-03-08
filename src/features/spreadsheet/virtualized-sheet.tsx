@@ -1,6 +1,8 @@
 "use client";
 
 import {
+  type ClipboardEvent,
+  type KeyboardEvent,
   type PointerEvent,
   startTransition,
   useEffect,
@@ -8,6 +10,21 @@ import {
   useState,
 } from "react";
 import { getVisibleWindow } from "@/features/spreadsheet/chunks";
+import {
+  createCellSelection,
+  createRangeSelection,
+  extendSelection,
+  getNavigationDelta,
+  getSelectionAnchor,
+  getSelectionBounds,
+  getSelectionDimensions,
+  getWriteStateAfterEvent,
+  isPrintableCellInput,
+  moveCellAddress,
+  parseClipboardMatrix,
+  selectionContainsAddress,
+  serializeSelectionMatrix,
+} from "@/features/spreadsheet/interaction";
 import { SparseSheet } from "@/features/spreadsheet/sparse-sheet";
 import {
   DEFAULT_SHEET_METRICS,
@@ -21,10 +38,12 @@ import type { DocumentMeta } from "@/types/metadata";
 import type {
   CellAddress,
   CellRecord,
+  Selection,
   SheetBounds,
   Viewport,
   VisibleWindow,
 } from "@/types/spreadsheet";
+import type { EditorMode, WriteState } from "@/types/ui";
 
 const DEFAULT_VIEWPORT_WIDTH = 960;
 const DEFAULT_VIEWPORT_HEIGHT = 640;
@@ -32,12 +51,14 @@ const DEFAULT_SELECTION: CellAddress = {
   col: 1,
   row: 1,
 };
+const WRITE_CONFIRMATION_DELAY_MS = 180;
+const RECONNECT_SETTLE_DELAY_MS = 220;
 
 function createSeededSheet(document: DocumentMeta) {
   const sheet = new SparseSheet();
 
   sheet.batchPaste({ col: 1, row: 1 }, [
-    [document.title, "Owner", document.ownerName, "Status", "Phase 3"],
+    [document.title, "Owner", document.ownerName, "Status", "Phase 4"],
     [
       "Room",
       document.roomId.slice(0, 12),
@@ -46,7 +67,7 @@ function createSeededSheet(document: DocumentMeta) {
         dateStyle: "medium",
         timeStyle: "short",
       }).format(document.lastModifiedAt),
-      "Scroll to verify virtualization",
+      "Type, tab, paste, or drag-select",
     ],
     ["Rows", "10,000", "Columns", "100", "Logical cells", "1,000,000"],
   ]);
@@ -65,6 +86,13 @@ function getCellDisplayValue(cell: CellRecord | null) {
 
 function buildSequence(start: number, end: number) {
   return Array.from({ length: end - start + 1 }, (_, index) => start + index);
+}
+
+function getSelectionMatrix(sheet: SparseSheet, selection: Selection) {
+  const selectionBounds = getSelectionBounds(selection);
+  const rows = sheet.readRange(selectionBounds.start, selectionBounds.end);
+
+  return rows.map((row) => row.map((cell) => getCellDisplayValue(cell)));
 }
 
 function useVirtualViewport(bounds: SheetBounds) {
@@ -177,8 +205,70 @@ function useVirtualViewport(bounds: SheetBounds) {
   };
 }
 
-export function VirtualizedSheet({ document }: { document: DocumentMeta }) {
+function formatWriteState(writeState: WriteState) {
+  switch (writeState) {
+    case "saving":
+      return "Saving...";
+    case "saved":
+      return "Saved";
+    case "reconnecting":
+      return "Reconnecting...";
+    case "offline":
+      return "Offline";
+    default:
+      return "Idle";
+  }
+}
+
+function getHeaderBackgroundColor(isActive: boolean, isSelected: boolean) {
+  if (isActive) {
+    return "rgba(42,118,130,0.18)";
+  }
+
+  if (isSelected) {
+    return "rgba(42,118,130,0.1)";
+  }
+
+  return "transparent";
+}
+
+function getCellBackgroundColor(isActive: boolean, isSelected: boolean) {
+  if (isActive) {
+    return "rgba(42,118,130,0.08)";
+  }
+
+  if (isSelected) {
+    return "rgba(42,118,130,0.04)";
+  }
+
+  return "rgba(255,255,255,0.72)";
+}
+
+export function VirtualizedSheet({
+  document,
+  onWriteStateChange,
+}: {
+  document: DocumentMeta;
+  onWriteStateChange?: (writeState: WriteState) => void;
+}) {
   const sheetRef = useRef<SparseSheet | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const keyboardProxyRef = useRef<HTMLTextAreaElement | null>(null);
+  const pointerAnchorRef = useRef<CellAddress | null>(null);
+  const isPointerSelectingRef = useRef(false);
+  const commitTimerRef = useRef<number | null>(null);
+  const reconnectTimerRef = useRef<number | null>(null);
+  const writeStateRef = useRef<WriteState>("idle");
+  const [, setSheetRevision] = useState(0);
+  const [selection, setSelection] = useState<Selection>(() =>
+    createCellSelection(DEFAULT_SELECTION)
+  );
+  const [editorMode, setEditorMode] = useState<EditorMode>("view");
+  const [editingAddress, setEditingAddress] = useState<CellAddress | null>(
+    null
+  );
+  const [draftValue, setDraftValue] = useState("");
+  const [writeState, setWriteState] = useState<WriteState>("idle");
 
   if (sheetRef.current === null) {
     sheetRef.current = createSeededSheet(document);
@@ -188,7 +278,12 @@ export function VirtualizedSheet({ document }: { document: DocumentMeta }) {
   const bounds = sheet.bounds;
   const { height: gridHeight, width: gridWidth } = getGridDimensions(bounds);
   const { handleScroll, scrollRef, viewport } = useVirtualViewport(bounds);
-  const [activeCell, setActiveCell] = useState<CellAddress>(DEFAULT_SELECTION);
+  const activeCell =
+    selection.type === "cell" ? selection.anchor : selection.end;
+  const selectionBounds = getSelectionBounds(selection);
+  const selectionStartLayout = getCellLayout(selectionBounds.start);
+  const selectionEndLayout = getCellLayout(selectionBounds.end);
+  const activeCellLayout = getCellLayout(activeCell);
   const visibleWindow: VisibleWindow = getVisibleWindow(viewport, bounds);
   const visibleRows = buildSequence(
     visibleWindow.rowStart,
@@ -198,44 +293,443 @@ export function VirtualizedSheet({ document }: { document: DocumentMeta }) {
     visibleWindow.colStart,
     visibleWindow.colEnd
   );
-  const selectionRect = getCellLayout(activeCell);
+  const selectionDimensions = getSelectionDimensions(selection);
 
-  const handlePointerDown = (event: PointerEvent<HTMLDivElement>) => {
+  const setNextWriteState = (nextWriteState: WriteState) => {
+    writeStateRef.current = nextWriteState;
+    setWriteState(nextWriteState);
+    onWriteStateChange?.(nextWriteState);
+  };
+
+  const emitWriteEvent = (
+    event:
+      | "flush-confirmed"
+      | "flush-queued"
+      | "network-offline"
+      | "network-online"
+  ) => {
+    setNextWriteState(getWriteStateAfterEvent(writeStateRef.current, event));
+  };
+
+  const scheduleWriteConfirmation = () => {
+    emitWriteEvent("flush-queued");
+
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    if (commitTimerRef.current !== null) {
+      window.clearTimeout(commitTimerRef.current);
+    }
+
+    commitTimerRef.current = window.setTimeout(() => {
+      commitTimerRef.current = null;
+      emitWriteEvent("flush-confirmed");
+    }, WRITE_CONFIRMATION_DELAY_MS);
+  };
+
+  const ensureCellVisible = (address: CellAddress) => {
     const node = scrollRef.current;
 
     if (!node) {
       return;
     }
 
+    const layout = getCellLayout(address);
+    const cellRight = layout.left + layout.width;
+    const cellBottom = layout.top + layout.height;
+
+    if (layout.left < node.scrollLeft) {
+      node.scrollLeft = layout.left;
+    } else if (cellRight > node.scrollLeft + node.clientWidth) {
+      node.scrollLeft = cellRight - node.clientWidth;
+    }
+
+    if (layout.top < node.scrollTop) {
+      node.scrollTop = layout.top;
+    } else if (cellBottom > node.scrollTop + node.clientHeight) {
+      node.scrollTop = cellBottom - node.clientHeight;
+    }
+  };
+
+  const applySelection = (nextSelection: Selection) => {
+    setSelection(nextSelection);
+    ensureCellVisible(
+      nextSelection.type === "cell" ? nextSelection.anchor : nextSelection.end
+    );
+  };
+
+  const writeCell = (address: CellAddress, value: string) => {
+    if (value.trim() === "") {
+      sheet.clearCell(address);
+    } else {
+      sheet.setCell(address, value);
+    }
+
+    setSheetRevision((current) => current + 1);
+    scheduleWriteConfirmation();
+  };
+
+  const clearSelectionContents = () => {
+    let changed = false;
+
+    for (
+      let row = selectionBounds.start.row;
+      row <= selectionBounds.end.row;
+      row += 1
+    ) {
+      for (
+        let col = selectionBounds.start.col;
+        col <= selectionBounds.end.col;
+        col += 1
+      ) {
+        changed =
+          sheet.clearCell({
+            col,
+            row,
+          }) || changed;
+      }
+    }
+
+    if (!changed) {
+      return;
+    }
+
+    setSheetRevision((current) => current + 1);
+    scheduleWriteConfirmation();
+  };
+
+  const startEditing = (address: CellAddress, initialValue?: string) => {
+    const nextValue =
+      initialValue ?? getCellDisplayValue(sheet.getCell(address));
+    setEditingAddress(address);
+    setDraftValue(nextValue);
+    setEditorMode(nextValue.startsWith("=") ? "formula" : "edit");
+    applySelection(createCellSelection(address));
+  };
+
+  const stopEditing = () => {
+    setEditingAddress(null);
+    setDraftValue("");
+    setEditorMode("view");
+    keyboardProxyRef.current?.focus();
+  };
+
+  const commitEditing = (options?: { nextSelection?: Selection }) => {
+    if (!editingAddress) {
+      return;
+    }
+
+    writeCell(editingAddress, draftValue);
+    const nextSelection =
+      options?.nextSelection ?? createCellSelection(editingAddress);
+    stopEditing();
+    applySelection(nextSelection);
+  };
+
+  useEffect(() => {
+    if (!editingAddress) {
+      return;
+    }
+
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, [editingAddress]);
+
+  useEffect(() => {
+    onWriteStateChange?.("idle");
+  }, [onWriteStateChange]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const updateWriteState = (nextWriteState: WriteState) => {
+      writeStateRef.current = nextWriteState;
+      setWriteState(nextWriteState);
+      onWriteStateChange?.(nextWriteState);
+    };
+
+    const emitWriteEvent = (
+      event:
+        | "flush-confirmed"
+        | "flush-queued"
+        | "network-offline"
+        | "network-online"
+    ) => {
+      updateWriteState(getWriteStateAfterEvent(writeStateRef.current, event));
+    };
+
+    const handleOffline = () => {
+      updateWriteState("offline");
+    };
+
+    const handleOnline = () => {
+      emitWriteEvent("network-online");
+
+      if (reconnectTimerRef.current !== null) {
+        window.clearTimeout(reconnectTimerRef.current);
+      }
+
+      reconnectTimerRef.current = window.setTimeout(() => {
+        reconnectTimerRef.current = null;
+        updateWriteState(commitTimerRef.current === null ? "saved" : "saving");
+      }, RECONNECT_SETTLE_DELAY_MS);
+    };
+
+    window.addEventListener("offline", handleOffline);
+    window.addEventListener("online", handleOnline);
+
+    if (!window.navigator.onLine) {
+      handleOffline();
+    }
+
+    return () => {
+      window.removeEventListener("offline", handleOffline);
+      window.removeEventListener("online", handleOnline);
+
+      if (commitTimerRef.current !== null) {
+        window.clearTimeout(commitTimerRef.current);
+      }
+
+      if (reconnectTimerRef.current !== null) {
+        window.clearTimeout(reconnectTimerRef.current);
+      }
+    };
+  }, [onWriteStateChange]);
+
+  const getAddressFromPointerEvent = (event: PointerEvent<HTMLDivElement>) => {
+    const node = scrollRef.current;
+
+    if (!node) {
+      return null;
+    }
+
     const rect = node.getBoundingClientRect();
-    const nextAddress = getCellAddressFromPoint(
+
+    return getCellAddressFromPoint(
       {
         x: event.clientX - rect.left + node.scrollLeft,
         y: event.clientY - rect.top + node.scrollTop,
       },
       bounds
     );
-
-    setActiveCell(nextAddress);
   };
+
+  const handlePointerDown = (event: PointerEvent<HTMLDivElement>) => {
+    if (editingAddress) {
+      return;
+    }
+
+    const node = scrollRef.current;
+    const nextAddress = getAddressFromPointerEvent(event);
+
+    if (!(node && nextAddress)) {
+      return;
+    }
+
+    event.preventDefault();
+    keyboardProxyRef.current?.focus();
+    isPointerSelectingRef.current = true;
+    pointerAnchorRef.current = event.shiftKey
+      ? getSelectionAnchor(selection)
+      : nextAddress;
+    applySelection(
+      event.shiftKey
+        ? createRangeSelection(getSelectionAnchor(selection), nextAddress)
+        : createCellSelection(nextAddress)
+    );
+    node.setPointerCapture(event.pointerId);
+  };
+
+  const handlePointerMove = (event: PointerEvent<HTMLDivElement>) => {
+    if (!isPointerSelectingRef.current) {
+      return;
+    }
+
+    const nextAddress = getAddressFromPointerEvent(event);
+    const anchor = pointerAnchorRef.current;
+
+    if (!(nextAddress && anchor)) {
+      return;
+    }
+
+    setSelection(createRangeSelection(anchor, nextAddress));
+  };
+
+  const handlePointerUp = (event: PointerEvent<HTMLDivElement>) => {
+    const node = scrollRef.current;
+
+    if (node?.hasPointerCapture(event.pointerId)) {
+      node.releasePointerCapture(event.pointerId);
+    }
+
+    isPointerSelectingRef.current = false;
+    pointerAnchorRef.current = null;
+  };
+
+  const handleDoubleClick = (event: PointerEvent<HTMLDivElement>) => {
+    const nextAddress = getAddressFromPointerEvent(event);
+
+    if (!nextAddress) {
+      return;
+    }
+
+    event.preventDefault();
+    keyboardProxyRef.current?.focus();
+    startEditing(nextAddress);
+  };
+
+  const handleKeyDown = (
+    event: KeyboardEvent<HTMLDivElement | HTMLTextAreaElement>
+  ) => {
+    if (editingAddress) {
+      return;
+    }
+
+    if (
+      event.key === "ArrowDown" ||
+      event.key === "ArrowLeft" ||
+      event.key === "ArrowRight" ||
+      event.key === "ArrowUp" ||
+      event.key === "Enter" ||
+      event.key === "Tab"
+    ) {
+      event.preventDefault();
+      const delta = getNavigationDelta(event.key, event.shiftKey);
+      const nextAddress = moveCellAddress(activeCell, delta, bounds);
+
+      applySelection(
+        event.shiftKey
+          ? extendSelection(selection, nextAddress)
+          : createCellSelection(nextAddress)
+      );
+      return;
+    }
+
+    if (event.key === "Backspace" || event.key === "Delete") {
+      event.preventDefault();
+      clearSelectionContents();
+      return;
+    }
+
+    if (event.key === "Escape") {
+      event.preventDefault();
+      applySelection(createCellSelection(activeCell));
+      return;
+    }
+
+    if (isPrintableCellInput(event)) {
+      event.preventDefault();
+      startEditing(activeCell, event.key);
+    }
+  };
+
+  const handleCopy = (
+    event: ClipboardEvent<HTMLDivElement | HTMLTextAreaElement>
+  ) => {
+    event.preventDefault();
+    const matrix = getSelectionMatrix(sheet, selection);
+    event.clipboardData.setData("text/plain", serializeSelectionMatrix(matrix));
+  };
+
+  const handlePaste = (
+    event: ClipboardEvent<HTMLDivElement | HTMLTextAreaElement>
+  ) => {
+    event.preventDefault();
+    const matrix = parseClipboardMatrix(
+      event.clipboardData.getData("text/plain")
+    );
+
+    if (matrix.length === 0) {
+      return;
+    }
+
+    sheet.batchPaste(selectionBounds.start, matrix);
+    setSheetRevision((current) => current + 1);
+    scheduleWriteConfirmation();
+
+    const rowCount = matrix.length;
+    const colCount = Math.max(...matrix.map((row) => row.length), 1);
+    applySelection(
+      createRangeSelection(selectionBounds.start, {
+        col: Math.min(
+          bounds.colCount,
+          selectionBounds.start.col + colCount - 1
+        ),
+        row: Math.min(
+          bounds.rowCount,
+          selectionBounds.start.row + rowCount - 1
+        ),
+      })
+    );
+  };
+
+  const handleInputKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      stopEditing();
+      return;
+    }
+
+    if (event.key === "Enter" || event.key === "Tab") {
+      event.preventDefault();
+      const delta = getNavigationDelta(
+        event.key === "Enter" ? "Enter" : "Tab",
+        event.shiftKey
+      );
+      const nextAddress = moveCellAddress(activeCell, delta, bounds);
+      commitEditing({
+        nextSelection: createCellSelection(nextAddress),
+      });
+    }
+  };
+
+  const selectionWidth =
+    selectionEndLayout.left -
+    selectionStartLayout.left +
+    selectionEndLayout.width;
+  const selectionHeight =
+    selectionEndLayout.top -
+    selectionStartLayout.top +
+    selectionEndLayout.height;
 
   return (
     <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-[1.75rem] border border-[var(--border)] bg-white/82 shadow-[0_18px_48px_rgba(15,23,42,0.08)]">
+      <textarea
+        aria-label="Spreadsheet keyboard input"
+        autoFocus
+        className="absolute h-px w-px overflow-hidden opacity-0"
+        onChange={() => {
+          // Intentionally no-op; the proxy exists only to receive keyboard events.
+        }}
+        onCopy={handleCopy}
+        onKeyDown={handleKeyDown}
+        onPaste={handlePaste}
+        readOnly
+        ref={keyboardProxyRef}
+        spellCheck={false}
+        value=""
+      />
+
       <div className="flex items-center justify-between border-[var(--border)] border-b bg-[rgba(247,249,250,0.92)] px-4 py-3 text-[0.72rem] text-[var(--muted)] uppercase tracking-[0.18em]">
         <div className="flex flex-wrap items-center gap-3">
           <span className="rounded-full bg-[rgba(42,118,130,0.08)] px-3 py-1 font-mono text-[var(--accent)]">
-            Active cell {getColumnHeaderLabel(activeCell.col)}
+            {editorMode === "view" ? "Active" : editorMode}{" "}
+            {getColumnHeaderLabel(activeCell.col)}
             {activeCell.row}
           </span>
           <span className="font-mono">
             Visible rows {visibleWindow.rowStart}-{visibleWindow.rowEnd}
           </span>
           <span className="font-mono">
-            Visible cols {getColumnHeaderLabel(visibleWindow.colStart)}-
-            {getColumnHeaderLabel(visibleWindow.colEnd)}
+            Selection {selectionDimensions.rowCount}x
+            {selectionDimensions.colCount}
           </span>
         </div>
         <div className="flex flex-wrap items-center gap-3 font-mono">
+          <span>{formatWriteState(writeState)}</span>
           <span>{bounds.rowCount.toLocaleString()} rows</span>
           <span>{bounds.colCount.toLocaleString()} cols</span>
           <span>{sheet.cellCount.toLocaleString()} populated</span>
@@ -251,6 +745,9 @@ export function VirtualizedSheet({ document }: { document: DocumentMeta }) {
           {visibleColumns.map((column) => {
             const left =
               (column - 1) * DEFAULT_SHEET_METRICS.colWidth - viewport.scrollX;
+            const isSelectedColumn =
+              column >= selectionBounds.start.col &&
+              column <= selectionBounds.end.col;
             const isActiveColumn = column === activeCell.col;
 
             return (
@@ -258,10 +755,13 @@ export function VirtualizedSheet({ document }: { document: DocumentMeta }) {
                 className="absolute top-0 flex h-full items-center border-[var(--border)] border-r px-3 font-mono text-[0.76rem] uppercase tracking-[0.22em]"
                 key={`column-${column}`}
                 style={{
-                  backgroundColor: isActiveColumn
-                    ? "rgba(42,118,130,0.14)"
-                    : "transparent",
-                  color: isActiveColumn ? "var(--foreground)" : "var(--muted)",
+                  backgroundColor: getHeaderBackgroundColor(
+                    isActiveColumn,
+                    isSelectedColumn
+                  ),
+                  color: isSelectedColumn
+                    ? "var(--foreground)"
+                    : "var(--muted)",
                   left,
                   width: DEFAULT_SHEET_METRICS.colWidth,
                 }}
@@ -276,6 +776,9 @@ export function VirtualizedSheet({ document }: { document: DocumentMeta }) {
           {visibleRows.map((row) => {
             const top =
               (row - 1) * DEFAULT_SHEET_METRICS.rowHeight - viewport.scrollY;
+            const isSelectedRow =
+              row >= selectionBounds.start.row &&
+              row <= selectionBounds.end.row;
             const isActiveRow = row === activeCell.row;
 
             return (
@@ -283,10 +786,11 @@ export function VirtualizedSheet({ document }: { document: DocumentMeta }) {
                 className="absolute left-0 flex items-center border-[var(--border)] border-b px-3 font-mono text-[0.75rem] tracking-[0.18em]"
                 key={`row-${row}`}
                 style={{
-                  backgroundColor: isActiveRow
-                    ? "rgba(42,118,130,0.14)"
-                    : "transparent",
-                  color: isActiveRow ? "var(--foreground)" : "var(--muted)",
+                  backgroundColor: getHeaderBackgroundColor(
+                    isActiveRow,
+                    isSelectedRow
+                  ),
+                  color: isSelectedRow ? "var(--foreground)" : "var(--muted)",
                   height: DEFAULT_SHEET_METRICS.rowHeight,
                   top,
                   width: "100%",
@@ -298,11 +802,17 @@ export function VirtualizedSheet({ document }: { document: DocumentMeta }) {
           })}
         </div>
 
+        {/* biome-ignore lint/a11y/noNoninteractiveElementInteractions: custom spreadsheet surfaces use pointer-driven selection on a scroll container */}
         <div
-          className="relative overflow-auto bg-[linear-gradient(180deg,_rgba(255,255,255,0.98),_rgba(249,251,252,0.98))]"
+          aria-label="Spreadsheet grid"
+          className="relative overflow-auto bg-[linear-gradient(180deg,_rgba(255,255,255,0.98),_rgba(249,251,252,0.98))] outline-none"
+          onDoubleClick={handleDoubleClick}
           onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
           onScroll={handleScroll}
           ref={scrollRef}
+          role="application"
         >
           <div
             className="relative"
@@ -318,15 +828,17 @@ export function VirtualizedSheet({ document }: { document: DocumentMeta }) {
                 const cell = sheet.getCell(address);
                 const isActive =
                   activeCell.col === column && activeCell.row === row;
+                const isSelected = selectionContainsAddress(selection, address);
 
                 return (
                   <div
-                    className="absolute overflow-hidden border-[var(--border)] border-r border-b bg-white/70 px-3 py-2 text-[0.92rem] text-[var(--foreground)] leading-6"
+                    className="absolute overflow-hidden border-[var(--border)] border-r border-b px-3 py-2 text-[0.92rem] text-[var(--foreground)] leading-6"
                     key={`${row}:${column}`}
                     style={{
-                      backgroundColor: isActive
-                        ? "rgba(42,118,130,0.06)"
-                        : "rgba(255,255,255,0.72)",
+                      backgroundColor: getCellBackgroundColor(
+                        isActive,
+                        isSelected
+                      ),
                       height: layout.height,
                       left: layout.left,
                       top: layout.top,
@@ -340,14 +852,62 @@ export function VirtualizedSheet({ document }: { document: DocumentMeta }) {
             )}
 
             <div
-              className="pointer-events-none absolute rounded-[0.7rem] border-2 border-[var(--accent)] shadow-[0_0_0_1px_rgba(255,255,255,0.9)]"
+              className="pointer-events-none absolute rounded-[0.85rem] bg-[rgba(42,118,130,0.07)]"
               style={{
-                height: selectionRect.height,
-                left: selectionRect.left,
-                top: selectionRect.top,
-                width: selectionRect.width,
+                height: selectionHeight,
+                left: selectionStartLayout.left,
+                top: selectionStartLayout.top,
+                width: selectionWidth,
               }}
             />
+
+            <div
+              className="pointer-events-none absolute rounded-[0.85rem] border-2 border-[var(--accent)] shadow-[0_0_0_1px_rgba(255,255,255,0.9)]"
+              style={{
+                height: selectionHeight,
+                left: selectionStartLayout.left,
+                top: selectionStartLayout.top,
+                width: selectionWidth,
+              }}
+            />
+
+            <div
+              className="pointer-events-none absolute rounded-[0.7rem] border-2 border-[var(--foreground)]"
+              style={{
+                height: activeCellLayout.height,
+                left: activeCellLayout.left,
+                top: activeCellLayout.top,
+                width: activeCellLayout.width,
+              }}
+            />
+
+            {editingAddress ? (
+              <div
+                className="absolute z-20 rounded-[0.75rem] border-2 border-[var(--accent)] bg-white shadow-[0_16px_40px_rgba(15,23,42,0.12)]"
+                style={{
+                  height: activeCellLayout.height,
+                  left: activeCellLayout.left,
+                  top: activeCellLayout.top,
+                  width: activeCellLayout.width,
+                }}
+              >
+                <input
+                  className="h-full w-full bg-transparent px-3 py-2 text-[0.92rem] text-[var(--foreground)] outline-none"
+                  onBlur={() => {
+                    commitEditing();
+                  }}
+                  onChange={(event) => {
+                    setDraftValue(event.target.value);
+                    setEditorMode(
+                      event.target.value.startsWith("=") ? "formula" : "edit"
+                    );
+                  }}
+                  onKeyDown={handleInputKeyDown}
+                  ref={inputRef}
+                  value={draftValue}
+                />
+              </div>
+            ) : null}
           </div>
         </div>
       </div>

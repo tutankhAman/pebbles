@@ -6,6 +6,7 @@ import { useAuth } from "@/features/auth/auth-provider";
 import { VirtualizedSheet } from "@/features/spreadsheet/virtualized-sheet";
 import { getDocumentById } from "@/lib/instantdb/metadata-store";
 import type { DocumentMeta } from "@/types/metadata";
+import type { WriteState } from "@/types/ui";
 
 function formatTimestamp(value: number) {
   return new Intl.DateTimeFormat("en", {
@@ -14,10 +15,26 @@ function formatTimestamp(value: number) {
   }).format(value);
 }
 
+function formatWriteState(writeState: WriteState) {
+  switch (writeState) {
+    case "saving":
+      return "Saving...";
+    case "saved":
+      return "Saved";
+    case "reconnecting":
+      return "Reconnecting...";
+    case "offline":
+      return "Offline";
+    default:
+      return "Idle";
+  }
+}
+
 export function DocumentShell({ documentId }: { documentId: string }) {
   const { session } = useAuth();
   const [document, setDocument] = useState<DocumentMeta | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [writeState, setWriteState] = useState<WriteState>("idle");
 
   useEffect(() => {
     let isCancelled = false;
@@ -88,7 +105,7 @@ export function DocumentShell({ documentId }: { documentId: string }) {
 
           <div className="flex flex-wrap items-center gap-2">
             <span className="rounded-full border border-[var(--border)] bg-[var(--panel)] px-3 py-1 font-mono text-[var(--muted)] text-xs">
-              saving state: idle
+              saving state: {formatWriteState(writeState).toLowerCase()}
             </span>
             <span className="rounded-full border border-[var(--border)] bg-[var(--panel)] px-3 py-1 font-mono text-[var(--muted)] text-xs">
               {session ? `viewer: ${session.displayName}` : "viewer: anonymous"}
@@ -103,7 +120,10 @@ export function DocumentShell({ documentId }: { documentId: string }) {
         </header>
 
         <div className="min-h-0 flex-1">
-          <VirtualizedSheet document={document} />
+          <VirtualizedSheet
+            document={document}
+            onWriteStateChange={setWriteState}
+          />
         </div>
       </div>
     </main>
