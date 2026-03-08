@@ -92,6 +92,39 @@ This plan is intentionally assignment-focused:
 - [ ] Batch remote formula recomputations so worker traffic scales with changed cells rather than packet count.
 - [ ] Persist durable Yjs state asynchronously so network or storage latency does not slow typing.
 
+### Local-First Persistence Rules
+
+- [ ] Treat the browser-resident `Yjs` document as the immediate collaboration runtime.
+- [ ] Treat backend persistence as a durability concern, not a prerequisite for rendering or collaboration.
+- [ ] Never wait for backend acknowledgement before:
+  - [ ] showing a typed value
+  - [ ] updating local selection state
+  - [ ] broadcasting a collaborative update to peers
+- [ ] Persist durable state on a debounced or batched schedule rather than per keystroke.
+- [ ] Persist Yjs-compatible binary state or chunk updates rather than row-per-cell CRUD writes.
+- [ ] Keep metadata updates such as `lastModified` off the hot edit path:
+  - [ ] debounce them
+  - [ ] coalesce repeated edits into a single metadata update where possible
+- [ ] Define separate guarantees for:
+  - [ ] local visible edit latency
+  - [ ] remote collaboration latency
+  - [ ] durable persistence lag
+- [ ] Accept short durability lag in exchange for a faster editor, but document the window honestly.
+- [ ] Recover unsaved-in-flight state through local Yjs/session persistence when possible if the backend flush has not landed yet.
+
+### Worker and Main-Thread Boundaries
+
+- [ ] Keep the main thread responsible only for:
+  - [ ] visible-window rendering
+  - [ ] selection and editor interaction
+  - [ ] lightweight Yjs event application
+- [ ] Move heavy or bursty work away from the main thread:
+  - [ ] formula parsing and recomputation
+  - [ ] large import/export transforms
+  - [ ] expensive snapshot/chunk serialization if it becomes measurable
+- [ ] Avoid full-document serialization on the main thread during active editing.
+- [ ] Ensure background persistence work never blocks scroll, typing, or cursor movement.
+
 ## Must-Haves From the Assignment
 
 - [ ] Dashboard lists documents with:
@@ -455,6 +488,15 @@ This plan is intentionally assignment-focused:
   - [ ] full browser close
   - [ ] device switch
   - [ ] all clients disconnecting
+- [ ] Keep persistence asynchronous relative to editing:
+  - [ ] local cell edits mutate local `Yjs` first
+  - [ ] remote peers receive provider updates before durable storage acknowledgement is required
+  - [ ] durable writes happen on a debounced flush schedule
+- [ ] Define the durability flush strategy explicitly:
+  - [ ] debounce window for normal typing bursts
+  - [ ] explicit flush on tab close / page hide where feasible
+  - [ ] explicit flush on idle periods
+  - [ ] retry behavior after transient provider or storage failures
 - [ ] Store durable sheet content as encoded Yjs document state or Yjs-compatible updates.
 - [ ] Do not mirror live cell-by-cell document state into `InstantDB`.
 - [ ] Update room bootstrap flow to:
@@ -467,7 +509,13 @@ This plan is intentionally assignment-focused:
   - [ ] no per-cell REST or JSON write amplification
   - [ ] coalesced presence traffic
   - [ ] bounded reconnection backoff
+  - [ ] no synchronous persistence calls in the local edit path
+- [ ] Ensure persistence work is isolated from UI hot paths:
+  - [ ] no full-room serialization on every keystroke
+  - [ ] no formula recomputation coupled directly to persistence flush timing
+  - [ ] workerize any measured heavy persistence transforms
 - [ ] Measure cross-device collaboration latency under realistic same-region conditions.
+- [ ] Measure durability lag separately from collaboration latency so the two concerns are not conflated.
 - [ ] Document the persistence boundary clearly in README:
   - [ ] `Yjs` and its durable store hold sheet contents
   - [ ] `InstantDB` holds metadata only
@@ -503,10 +551,23 @@ This plan is intentionally assignment-focused:
   - [ ] room bootstrap metadata
   - [ ] chunk discovery for large sheets
   - [ ] durable Yjs room and chunk persistence
+- [ ] Keep the live collaboration flow local-first after migration:
+  - [ ] backend writes remain asynchronous
+  - [ ] provider fanout remains independent of metadata persistence
+  - [ ] durable persistence cannot block local rendering
 - [ ] Keep the live editor contract unchanged while migrating the dashboard and room bootstrap paths.
 - [ ] Migrate existing document metadata from `InstantDB` to the new backend shape.
 - [ ] Stop treating `InstantDB` as a required runtime dependency once the new backend is verified.
 - [ ] Keep sheet contents out of row-per-cell relational writes; store them as Yjs-compatible chunked document state.
+- [ ] Model the consolidated backend around two distinct paths:
+  - [ ] hot path: room bootstrap, auth, low-latency provider connectivity
+  - [ ] warm path: debounced durability, chunk registry updates, metadata refresh
+- [ ] Define chunk durability semantics for dense sheets:
+  - [ ] chunk identity
+  - [ ] chunk version / revision tracking
+  - [ ] flush granularity
+  - [ ] restore order
+- [ ] Ensure metadata writes such as `lastModified` are derived from debounced document activity rather than per-cell writes.
 - [ ] Validate that migration preserves:
   - [ ] document open flow
   - [ ] room lookup
@@ -547,6 +608,7 @@ This plan is intentionally assignment-focused:
   - [ ] collaboration propagation latency across two sessions
   - [ ] collaboration propagation latency across two devices on the networked provider
   - [ ] rejoin and restore latency from durable Yjs persistence
+  - [ ] durability flush lag during active typing bursts
 - [ ] Optimize hot spots:
   - [ ] viewport calculation
   - [ ] rerender boundaries
@@ -554,6 +616,8 @@ This plan is intentionally assignment-focused:
   - [ ] worker-based formula recalculation path
   - [ ] Yjs transport batching and provider message size
   - [ ] presence throttling under concurrent activity
+  - [ ] persistence debounce window and flush cost
+  - [ ] chunk serialize / deserialize cost
 - [ ] Document real observed performance numbers.
 - [ ] If `<50ms` is not consistently met, document realistic conditions and current bottlenecks honestly.
 
