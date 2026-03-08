@@ -29,8 +29,10 @@ Lightweight real-time collaborative spreadsheet for the Trademarkia frontend eng
 | Language | TypeScript strict mode | Type safety across UI, state, and worker boundaries |
 | Styling | Tailwind CSS | UI styling and layout |
 | Identity | Firebase Auth | Google sign-in and session identity bootstrap |
-| Metadata store | InstantDB | Document list, title, owner, room id, last modified, access metadata |
+| Metadata store | InstantDB (current) | Early-phase document list, title, owner, room id, last modified, access metadata |
 | Live collaboration | Yjs | Live cell state, CRDT convergence, presence awareness |
+| Durable content store | Chunked Yjs persistence backend (target) | Saved sheet contents, cross-device restore, large-sheet chunk storage |
+| Metadata + chunk registry | Consolidated backend (target) | Final metadata ownership, access control, chunk registry, room lookup |
 | Formula engine | HyperFormula | Formula parsing, dependency tracking, computed values |
 | Local UI state | Zustand | Selection, editor mode, viewport, write-state status |
 | Worker runtime | Web Worker | Isolated formula evaluation |
@@ -49,12 +51,20 @@ Browser
  ├─ HyperFormula Worker
  └─ Firebase Auth Client
 
-Backend Services
+Backend Services - current implementation
  ├─ Firebase Auth
  └─ InstantDB
      ├─ users
      ├─ documents
      └─ access / membership metadata
+
+Backend Services - target scalable architecture
+ ├─ Firebase Auth
+ ├─ Consolidated metadata + chunk registry backend
+ └─ Durable Yjs persistence backend
+     ├─ room lookup
+     ├─ chunk registry
+     └─ chunked Yjs document persistence
 ```
 
 ## Source of Truth Rules
@@ -76,6 +86,17 @@ Backend Services
   - last modified
   - collaboration room identifier
   - optional access records
+- In the target architecture, this metadata ownership migrates behind a repository boundary to the consolidated backend.
+
+### Durable content persistence
+
+- The final scalable backend stores saved sheet contents as Yjs-compatible persisted state.
+- For very large dense sheets, persisted state should be partitioned into chunks rather than stored as one giant document blob.
+- The durable content store is responsible for:
+  - restoring sheet contents after all clients disconnect
+  - cross-device document recovery
+  - chunk lookup for large-sheet working sets
+- `InstantDB` is not intended to store live cell contents or chunk payloads in the target architecture.
 
 ### Local UI state
 
@@ -239,6 +260,7 @@ type FormulaWorkerResponse =
 - Store document discovery and dashboard metadata.
 - Provide a stable mapping from document id to collaboration room id.
 - Track update time for dashboard sorting and display.
+- Serve as the early-phase metadata layer before later backend consolidation.
 
 ### Suggested metadata model
 
@@ -272,6 +294,50 @@ type DocumentAccess = {
 }
 ```
 
+## 6. Target Consolidated Backend
+
+### Responsibility
+
+- Replace long-term `InstantDB` dependency without breaking established editor contracts.
+- Own final metadata, access control, room lookup, and chunk registry concerns.
+- Coordinate with the durable Yjs persistence backend for sheet-content restore.
+
+### Target data ownership
+
+```ts
+type DocumentMetaRecord = {
+  id: string
+  title: string
+  ownerId: string
+  ownerName: string
+  roomId: string
+  lastModifiedAt: number
+  createdAt: number
+  chunkLayoutVersion: number
+}
+
+type DocumentAccessRecord = {
+  id: string
+  documentId: string
+  userId: string
+  role: "owner" | "editor" | "viewer"
+}
+
+type SheetChunkRecord = {
+  id: string
+  documentId: string
+  chunkId: string
+  persistedStateRef: string
+  updatedAt: number
+}
+```
+
+### Notes
+
+- The consolidated backend should not store sheet contents as row-per-cell relational records.
+- It should track which chunks exist and where their durable Yjs-compatible state lives.
+- This keeps metadata queries cheap while preserving a scalable path for dense sheets.
+
 ## Data Flow Specifications
 
 ## Document open flow
@@ -299,7 +365,7 @@ type DocumentAccess = {
 7. UI receives computed outputs
 8. Remote peers receive Yjs update
 9. Write-state transitions to Saved when local sync is considered landed
-10. InstantDB lastModifiedAt is updated asynchronously
+10. Metadata lastModifiedAt is updated asynchronously through the active repository implementation
 ```
 
 ## Remote edit flow
@@ -386,6 +452,7 @@ type Selection =
 - Render only visible rows and columns plus overscan.
 - Keep row and column headers pinned relative to the scroll container.
 - Prefer DOM-based virtualization first for assignment speed unless canvas becomes necessary.
+- For dense large-sheet scaling, the persisted model can be chunked even if the initial rendered viewport remains a single editor surface.
 
 ### Render responsibilities
 
@@ -448,13 +515,17 @@ type SessionIdentity = {
 - `1M` logical cells supported through sparse storage
 - `<50ms` collaboration propagation under normal local-region conditions
 - Smooth visible-window scrolling during demo scenarios
+- Same-browser collaboration keeps the `BroadcastChannel` fast path even after cross-device transport is added
+- Large dense sheets are persisted and restored through chunked Yjs-backed state rather than one monolithic document
 
 ### Measurement plan
 
 - measure initial document open time
 - measure local edit to remote visible update time across two tabs
+- measure local edit to remote visible update time across two devices on the networked provider
 - measure visible-window rerender cost
 - measure formula recompute time for small dependency chains
+- measure cross-device restore time from durable Yjs persistence
 
 ### Likely hot paths
 
@@ -462,6 +533,8 @@ type SessionIdentity = {
 - visible-cell rerender boundaries
 - Yjs update fan-out into UI state
 - worker recomputation batching
+- provider message size and batching
+- chunk hydrate and restore path
 
 ## Deployment Model
 
@@ -474,6 +547,7 @@ type SessionIdentity = {
 - Firebase environment variables
 - InstantDB configuration
 - Yjs provider configuration
+- durable Yjs persistence backend configuration
 
 ### Build requirements
 
@@ -509,17 +583,21 @@ type SessionIdentity = {
 
 ## Open Implementation Decisions
 
-- Which Yjs provider transport to use in this assignment implementation
+- Which networked Yjs provider transport to use for cross-device collaboration
 - Whether DOM virtualization is sufficient or canvas should be introduced
 - Whether clipboard support lands in MVP or immediate post-MVP polish
 - Whether `AVERAGE` is included if HyperFormula makes it essentially free
+- When to execute the InstantDB migration relative to submission timing
+- Which consolidated backend should own metadata and chunk registry after migration
 
 ## Interview Summary
 
 The core design choice is deliberate:
 
 - `Yjs` handles live collaborative state because it solves contention cleanly.
-- `InstantDB` handles metadata because the dashboard and document discovery do not need CRDT complexity.
+- `InstantDB` handles metadata in early phases because the dashboard and document discovery do not need CRDT complexity.
+- The final scalable backend can remove the `InstantDB` dependency once metadata and chunk-registry responsibilities migrate behind stable repository boundaries.
+- Durable sheet contents should live as chunked Yjs-compatible state, not as row-per-cell database writes.
 - `HyperFormula` runs in a worker because formulas should not compete with rendering and interaction.
 - `Zustand` stays limited to local UI state to keep ownership boundaries clear.
 

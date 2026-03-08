@@ -42,10 +42,28 @@ This plan is intentionally assignment-focused:
 - [ ] Use `HyperFormula` instead of writing a custom formula engine for the assignment.
 - [ ] Do not introduce separate snapshot/versioning/object-storage infrastructure for the first submission.
 - [ ] Optimize for correctness, latency, and clarity over long-term archival complexity.
+- [ ] Keep collaboration local-first so edits land in the local Yjs document before any network acknowledgement.
+- [ ] Use a hybrid Yjs transport strategy:
+  - [ ] `BroadcastChannel` for same-browser multi-tab propagation
+  - [ ] a networked Yjs provider for cross-device propagation
+- [ ] Keep `InstantDB` metadata-only even after cross-device sync is added.
+- [ ] Persist sheet contents as durable Yjs document state rather than mirroring live cells into `InstantDB`.
+
+### Target Backend Evolution
+
+- [ ] Keep `InstantDB` only as the early delivery metadata layer for the already-completed phases.
+- [ ] Move toward a consolidated backend shape once collaboration and persistence are proven:
+  - [ ] one durable metadata store
+  - [ ] one chunk registry for large-sheet partitioning
+  - [ ] one durable Yjs persistence backend for sheet contents
+- [ ] Preserve the application-level contract during migration so the editor, dashboard, and collaboration code do not need a rewrite.
+- [ ] Treat `InstantDB` migration as a dedicated later phase rather than churning completed phases.
+- [ ] For very large dense sheets, prefer chunked Yjs-backed persistence over a single monolithic document blob.
 
 ### Source of Truth Rules
 
 - [ ] `Yjs` is the source of truth for live document cells and collaborator presence.
+- [ ] A durable Yjs persistence layer is the recovery source for saved sheet contents after all clients disconnect.
 - [ ] `InstantDB` is the source of truth for metadata:
   - [ ] users
   - [ ] documents
@@ -60,6 +78,19 @@ This plan is intentionally assignment-focused:
   - [ ] pending write status
 - [ ] `HyperFormula` computes derived values in a dedicated worker and sends computed results back to the UI layer.
 - [ ] Raw cell input remains the authoritative user-authored value; computed display values are derived.
+- [ ] Remote transport and durable persistence must never force the editor to wait before applying a local edit.
+
+### Collaboration Transport Strategy
+
+- [ ] Apply cell edits to the local `Yjs` document immediately.
+- [ ] Fan out local changes through the fastest available path:
+  - [ ] `BroadcastChannel` for same-browser tabs
+  - [ ] networked Yjs provider for cross-device peers
+- [ ] Keep Yjs updates in binary form over the network rather than translating live edits into JSON mutation payloads.
+- [ ] Prefer a region-close WebSocket transport for cross-device collaboration.
+- [ ] Throttle noisy presence updates so cursor and selection traffic does not compete with cell edits.
+- [ ] Batch remote formula recomputations so worker traffic scales with changed cells rather than packet count.
+- [ ] Persist durable Yjs state asynchronously so network or storage latency does not slow typing.
 
 ## Must-Haves From the Assignment
 
@@ -370,10 +401,14 @@ This plan is intentionally assignment-focused:
   - [ ] cells
   - [ ] runtime sheet metadata needed during editing
 - [ ] Implement Yjs provider / room connection lifecycle.
+- [ ] Implement the low-latency local collaboration path first:
+  - [ ] same-browser propagation through `BroadcastChannel`
+  - [ ] refresh recovery from persisted local Yjs state
 - [ ] Bootstrap the correct collaboration room from InstantDB document metadata.
 - [ ] Propagate cell edits across sessions through Yjs updates.
 - [ ] Define how local edits map to Yjs updates.
 - [ ] Define how remote Yjs updates map into rendered sheet state.
+- [ ] Ensure local edits are visible immediately before network acknowledgement.
 - [ ] Document contention behavior:
   - [ ] CRDT-backed convergence through Yjs
   - [ ] any remaining UI-level conflict edge cases
@@ -395,6 +430,101 @@ This plan is intentionally assignment-focused:
 - [ ] Two sessions stay in sync.
 - [ ] Presence is visible and stable.
 - [ ] Collaboration behavior is CRDT-based, correct, and documented.
+- [ ] Local same-browser collaboration path is low-latency and robust enough to build on for cross-device sync.
+
+---
+
+## Phase 6B - Cross-Device Collaboration and Durable Yjs Persistence
+
+### Goals
+
+- [ ] Extend collaboration from local multi-tab to cross-device, cross-browser sessions.
+- [ ] Keep local edits instant while minimizing cross-device propagation latency.
+- [ ] Add durable Yjs-backed sheet persistence without breaking the `InstantDB` metadata-only boundary.
+
+### Checklist
+
+- [ ] Introduce a networked Yjs provider abstraction that can coexist with the local `BroadcastChannel` fast path.
+- [ ] Choose a cross-device transport optimized for low latency:
+  - [ ] region-close WebSocket-based Yjs provider
+  - [ ] long-lived connection model suitable for frequent small updates
+- [ ] Keep the editor transport-agnostic so same-browser and cross-device peers share the same Yjs room API.
+- [ ] Ensure same-browser tabs still short-circuit through `BroadcastChannel` even when the networked provider is connected.
+- [ ] Authenticate room access with the active user identity before joining the remote provider.
+- [ ] Persist durable Yjs room state outside the browser so sheet contents survive:
+  - [ ] full browser close
+  - [ ] device switch
+  - [ ] all clients disconnecting
+- [ ] Store durable sheet content as encoded Yjs document state or Yjs-compatible updates.
+- [ ] Do not mirror live cell-by-cell document state into `InstantDB`.
+- [ ] Update room bootstrap flow to:
+  - [ ] fetch metadata from `InstantDB`
+  - [ ] connect local room transport
+  - [ ] connect networked Yjs provider
+  - [ ] hydrate from durable Yjs state when needed
+- [ ] Optimize remote propagation path:
+  - [ ] binary Yjs updates over the wire
+  - [ ] no per-cell REST or JSON write amplification
+  - [ ] coalesced presence traffic
+  - [ ] bounded reconnection backoff
+- [ ] Measure cross-device collaboration latency under realistic same-region conditions.
+- [ ] Document the persistence boundary clearly in README:
+  - [ ] `Yjs` and its durable store hold sheet contents
+  - [ ] `InstantDB` holds metadata only
+
+### Exit Criteria
+
+- [ ] A document edited on one device appears on another device through the networked Yjs provider.
+- [ ] Reloading from a different device restores the latest durable sheet contents.
+- [ ] Same-browser collaboration remains fast after adding cross-device transport.
+- [ ] Cross-device collaboration latency is measured and documented honestly.
+
+---
+
+## Phase 6C - Backend Consolidation and InstantDB Migration
+
+### Goals
+
+- [ ] Remove long-term dependency on `InstantDB` without disturbing already-completed phases.
+- [ ] Consolidate metadata, chunk registry, and durable Yjs persistence into a more scalable backend shape.
+- [ ] Keep the editor and collaboration layers stable while swapping backend ownership under clean interfaces.
+
+### Checklist
+
+- [ ] Define the target backend contract for:
+  - [ ] document metadata
+  - [ ] access control
+  - [ ] collaboration room lookup
+  - [ ] chunk registry
+  - [ ] durable Yjs persistence references
+- [ ] Introduce a metadata repository abstraction if the codebase does not already isolate `InstantDB`.
+- [ ] Add a new backend implementation for:
+  - [ ] document list and lookup
+  - [ ] room bootstrap metadata
+  - [ ] chunk discovery for large sheets
+  - [ ] durable Yjs room and chunk persistence
+- [ ] Keep the live editor contract unchanged while migrating the dashboard and room bootstrap paths.
+- [ ] Migrate existing document metadata from `InstantDB` to the new backend shape.
+- [ ] Stop treating `InstantDB` as a required runtime dependency once the new backend is verified.
+- [ ] Keep sheet contents out of row-per-cell relational writes; store them as Yjs-compatible chunked document state.
+- [ ] Validate that migration preserves:
+  - [ ] document open flow
+  - [ ] room lookup
+  - [ ] last modified semantics
+  - [ ] access checks
+  - [ ] cross-device restore
+- [ ] Document the final backend split in README and architecture notes:
+  - [ ] live collaboration in `Yjs`
+  - [ ] durable chunked Yjs persistence for sheet contents
+  - [ ] consolidated metadata and chunk registry backend
+  - [ ] no `InstantDB` dependency in the final target architecture
+
+### Exit Criteria
+
+- [ ] `InstantDB` is no longer required by the target architecture.
+- [ ] Metadata and chunk registry live in the consolidated backend.
+- [ ] Durable sheet contents are stored as chunked Yjs-compatible state.
+- [ ] Existing editor and dashboard flows continue to work through stable repository boundaries.
 
 ---
 
@@ -415,11 +545,15 @@ This plan is intentionally assignment-focused:
   - [ ] scroll responsiveness on large logical sheets
   - [ ] edit-to-render latency
   - [ ] collaboration propagation latency across two sessions
+  - [ ] collaboration propagation latency across two devices on the networked provider
+  - [ ] rejoin and restore latency from durable Yjs persistence
 - [ ] Optimize hot spots:
   - [ ] viewport calculation
   - [ ] rerender boundaries
   - [ ] subscription update fan-out
   - [ ] worker-based formula recalculation path
+  - [ ] Yjs transport batching and provider message size
+  - [ ] presence throttling under concurrent activity
 - [ ] Document real observed performance numbers.
 - [ ] If `<50ms` is not consistently met, document realistic conditions and current bottlenecks honestly.
 
@@ -428,6 +562,7 @@ This plan is intentionally assignment-focused:
 - [ ] There is concrete evidence behind the performance claims.
 - [ ] Large-sheet behavior is demoable.
 - [ ] Collaboration latency story is measured, not guessed.
+- [ ] Cross-device latency story is backed by real measurements, not assumptions.
 
 ---
 
@@ -520,6 +655,7 @@ This plan is intentionally assignment-focused:
 - [ ] Concurrent edits converge predictably.
 - [ ] Presence works reliably.
 - [ ] Reconnect state is visible.
+- [ ] Cross-device collaboration restores and converges correctly.
 
 ### Documentation
 
@@ -537,6 +673,8 @@ This plan is intentionally assignment-focused:
 6. [ ] Editing and write-state indicator
 7. [ ] Formula support
 8. [ ] Realtime sync and presence
+8.5. [ ] Cross-device collaboration transport and durable Yjs persistence
+8.75. [ ] Backend consolidation and InstantDB migration
 9. [ ] Performance pass
 10. [ ] Bonus features only if stable
 11. [ ] Submission packaging

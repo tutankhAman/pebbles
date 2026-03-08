@@ -368,6 +368,101 @@ Possible low-risk helper work:
 
 ---
 
+## Phase 6B - Cross-Device Collaboration and Durable Yjs Persistence
+
+### Parallelization decision
+
+- `Isolated transport and persistence parallelization`
+
+### Why
+
+- Cross-device transport and durable Yjs persistence can stay behind collaboration-facing interfaces if the room API is already locked.
+
+### Main agent tasks first
+
+- Lock the transport abstraction:
+  - local `BroadcastChannel` fast path
+  - networked provider path
+- Lock durable Yjs persistence contract.
+- Lock the boundary between room bootstrap metadata and provider connection.
+
+### Parallel worker tasks
+
+- `Agent C`
+  - networked provider integration
+  - reconnect behavior
+  - awareness propagation tuning
+- `Agent F`
+  - durable Yjs persistence adapter
+  - chunk registry contract support if introduced in this phase
+
+### Main agent integration tasks
+
+- Keep same-browser collaboration fast after networked provider is added.
+- Verify local-first edits still land before network acknowledgement.
+- Verify cross-device restore path from durable Yjs persistence.
+
+### Do not parallelize
+
+- changing the app-facing room API in multiple places at once
+- mixing provider transport work with broad editor rewrites
+- persistence format churn after clients depend on it
+
+### Phase exit checks
+
+- Same-browser tabs still sync through the fast path.
+- Cross-device sessions can join and converge.
+- Durable Yjs restore works across browser/device boundaries.
+
+---
+
+## Phase 6C - Backend Consolidation and InstantDB Migration
+
+### Parallelization decision
+
+- `Repository-boundary migration with isolated backend work`
+
+### Why
+
+- This phase should not churn completed editor work. It is safest when the backend swap happens behind stable repository interfaces.
+
+### Main agent tasks first
+
+- Lock metadata repository interfaces.
+- Lock chunk-registry contract.
+- Lock migration success criteria:
+  - dashboard still works
+  - room lookup still works
+  - access metadata still works
+
+### Parallel worker tasks
+
+- `Agent F`
+  - new backend integration
+  - metadata migration
+  - chunk-registry and persistence references
+- `Agent A`
+  - minimal dashboard/query adjustments only if repository interfaces require them
+
+### Main agent integration tasks
+
+- Swap runtime wiring from `InstantDB` to the consolidated backend.
+- Keep the editor and collaboration APIs unchanged where possible.
+- Verify migration does not break document open flow.
+
+### Do not parallelize
+
+- the same repository interface files across multiple workers
+- editor collaboration code and metadata backend swaps in one mixed refactor
+
+### Phase exit checks
+
+- `InstantDB` is no longer on the critical runtime path.
+- Metadata and chunk-registry lookups come from the consolidated backend.
+- Existing editor flows still work.
+
+---
+
 ## Phase 7 - Performance Pass
 
 ### Parallelization decision
@@ -385,7 +480,9 @@ Possible low-risk helper work:
   - editor load time
   - visible-grid scroll behavior
   - local edit to remote visible update latency
+  - cross-device visible update latency
   - formula recompute latency
+  - durable restore latency
 - Identify top bottlenecks.
 - Patch the highest-signal issues first.
 
@@ -403,6 +500,8 @@ Possible targeted delegation after profiling:
   - Yjs update batching improvements
 - `Agent D`
   - worker recomputation batching
+- `Agent F`
+  - chunk hydrate / persistence-path optimization
 
 ### Do not parallelize
 
@@ -531,10 +630,22 @@ Possible targeted delegation after profiling:
 
 ### Stage 8
 
+- Main agent locks transport and persistence contracts for cross-device sync.
+- Spawn `Agent C` and `Agent F` for Phase 6B where useful.
+- Main agent verifies cross-device restore and provider behavior.
+
+### Stage 9
+
+- Main agent locks repository boundaries for backend consolidation.
+- Spawn `Agent F` for Phase 6C.
+- Main agent verifies the InstantDB migration path.
+
+### Stage 10
+
 - Main agent performs performance pass.
 - Delegate only targeted bottlenecks after profiling.
 
-### Stage 9
+### Stage 11
 
 - Optional `Agent E` for polish.
 - Main agent finalizes submission packaging.
@@ -550,6 +661,7 @@ If you want the simplest useful multi-agent strategy, use this:
 3. `Agent B`: sheet model + grid + editing shell
 4. `Agent D`: formula worker
 5. `Agent C`: Yjs collaboration + presence
-6. Main agent: integration, performance, submission
+6. `Agent F`: backend consolidation and persistence migration when the codebase is ready
+7. Main agent: integration, performance, submission
 
 This is the best balance between speed and coordination cost.

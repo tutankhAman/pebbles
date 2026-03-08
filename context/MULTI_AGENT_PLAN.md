@@ -15,6 +15,12 @@ This split assumes the current architecture:
 - `HyperFormula` in a dedicated worker
 - `Zustand` for ephemeral UI state
 
+Target backend evolution after the already-completed phases:
+
+- migrate away from `InstantDB` rather than rewriting earlier work
+- consolidate metadata and chunk registry into a dedicated backend
+- keep durable sheet contents in chunked Yjs-compatible persistence
+
 ## Operating Rules
 
 - One agent owns one write surface.
@@ -501,6 +507,76 @@ List every file you changed in your final message.
 
 ---
 
+## Agent F - Backend Consolidation and Migration
+
+### Description
+
+Owns the later-phase backend migration away from `InstantDB` while preserving stable editor and dashboard contracts.
+
+### Ownership
+
+- metadata repository migration
+- consolidated backend contract
+- chunk registry
+- durable Yjs persistence integration points
+- migration tooling and compatibility shims
+
+### Files / Areas
+
+```text
+apps/web/src/lib/instantdb/**
+apps/web/src/lib/yjs/**
+apps/web/src/lib/backend/**
+apps/web/src/types/metadata.ts
+README.md
+```
+
+### Prompt
+
+```text
+You own the backend-consolidation phase for a collaborative spreadsheet app.
+
+Architecture is fixed:
+- Yjs remains the source of truth for live sheet state and presence
+- durable sheet contents are stored as chunked Yjs-compatible persisted state
+- InstantDB is an early-phase metadata dependency that should be migrated away later
+- the editor and dashboard should keep stable repository contracts during migration
+
+Your ownership:
+- metadata repository abstraction
+- migration off InstantDB
+- consolidated metadata + chunk registry backend integration points
+- durable Yjs persistence references and compatibility adapters
+
+Do not edit:
+- spreadsheet rendering internals
+- formula worker internals
+- auth UI unless a backend contract change forces a minimal adaptation
+- shared contracts unless migration requires a clean coordinated update
+
+Other workers are editing in parallel. Do not revert their work.
+Make regular small commits after coherent task completion so the integration history stays readable.
+
+Deliver:
+- repository boundary that hides the metadata backend implementation
+- migration path away from InstantDB
+- clear chunk-registry and durable-persistence contracts
+- minimal churn for the rest of the app
+
+List every file you changed in your final message.
+```
+
+### Task List
+
+- Introduce or harden metadata repository interfaces.
+- Implement the replacement metadata backend behind those interfaces.
+- Add chunk-registry contract types and adapters.
+- Add migration utilities for existing metadata records if needed.
+- Keep room bootstrap and dashboard queries stable through the migration.
+- Document the final backend split in README and architecture notes.
+
+---
+
 ## Recommended Spawn Order
 
 1. Main agent creates route skeleton and shared contracts.
@@ -508,7 +584,8 @@ List every file you changed in your final message.
 3. Main agent integrates Agent B and Agent D first.
 4. Main agent integrates Agent C into the editor.
 5. Main agent connects Agent A dashboard flow to room bootstrap.
-6. Spawn Agent E only after the core path is stable.
+6. Spawn Agent F only when cross-device collaboration and durable Yjs persistence are already stable enough to migrate metadata cleanly.
+7. Spawn Agent E only after the core path is stable.
 
 ## Integration Checkpoints
 
