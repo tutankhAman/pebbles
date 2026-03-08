@@ -6,10 +6,12 @@ import {
   type PointerEvent,
   startTransition,
   useEffect,
+  useEffectEvent,
   useMemo,
   useRef,
   useState,
 } from "react";
+import { useCollaborationRoom } from "@/features/collaboration/use-collaboration-room";
 import { useFormulaEngine } from "@/features/formulas/use-formula-engine";
 import { createCellKey } from "@/features/spreadsheet/addressing";
 import { getVisibleWindow } from "@/features/spreadsheet/chunks";
@@ -37,7 +39,8 @@ import {
   getGridDimensions,
   getViewportFromScroll,
 } from "@/features/spreadsheet/viewport";
-import type { DocumentMeta } from "@/types/metadata";
+import { touchDocument } from "@/lib/instantdb/metadata-store";
+import type { DocumentMeta, SessionIdentity } from "@/types/metadata";
 import type {
   CellAddress,
   CellRecord,
@@ -281,9 +284,11 @@ function getCellBackgroundColor(isActive: boolean, isSelected: boolean) {
 export function VirtualizedSheet({
   document,
   onWriteStateChange,
+  session,
 }: {
   document: DocumentMeta;
   onWriteStateChange?: (writeState: WriteState) => void;
+  session: SessionIdentity | null;
 }) {
   const sheetRef = useRef<SparseSheet | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -309,7 +314,7 @@ export function VirtualizedSheet({
   const [writeState, setWriteState] = useState<WriteState>("idle");
 
   if (sheetRef.current === null) {
-    sheetRef.current = createSeededSheet(document);
+    sheetRef.current = new SparseSheet();
   }
 
   const sheet = sheetRef.current;
@@ -332,15 +337,21 @@ export function VirtualizedSheet({
     visibleWindow.colEnd
   );
   const selectionDimensions = getSelectionDimensions(selection);
-  const activeCellRecord = sheet.getCell(activeCell);
-  const activeCellRaw = getCellDisplayValue(activeCellRecord);
-  const initialFormulaCells = useMemo(
+  const initialSeedCells = useMemo(
     () =>
-      Array.from(sheet.snapshot(), ([key, value]) => ({
+      Array.from(createSeededSheet(document).snapshot(), ([key, value]) => ({
         key,
         raw: value.raw,
       })),
-    [sheet]
+    [document]
+  );
+  const initialFormulaCells = useMemo(
+    () =>
+      initialSeedCells.map(({ key, raw }) => ({
+        key,
+        raw,
+      })),
+    [initialSeedCells]
   );
   const visibleKeys = useMemo(
     () =>
@@ -349,18 +360,58 @@ export function VirtualizedSheet({
       ),
     [visibleColumns, visibleRows]
   );
+  const { batchUpsert, computedValues, deleteCell, formulaErrors, isReady } =
+    useFormulaEngine({
+      bounds,
+      initialCells: initialFormulaCells,
+      visibleKeys,
+    });
+  const handleCollaborativeCellChanges = useEffectEvent(
+    (changes: Array<{ key: string; value: CellRecord | null }>) => {
+      const sheetModel = sheetRef.current;
+
+      if (!sheetModel) {
+        return;
+      }
+
+      const formulaUpserts: Array<{ key: string; raw: string }> = [];
+
+      for (const change of changes) {
+        if (change.value === null) {
+          sheetModel.clearCellByKey(change.key);
+          deleteCell(change.key);
+          continue;
+        }
+
+        sheetModel.setCellByKey(change.key, change.value);
+        formulaUpserts.push({
+          key: change.key,
+          raw: change.value.raw,
+        });
+      }
+
+      if (formulaUpserts.length > 0) {
+        batchUpsert(formulaUpserts);
+      }
+
+      setSheetRevision((current) => current + 1);
+    }
+  );
   const {
-    batchUpsert,
-    computedValues,
-    deleteCell,
-    formulaErrors,
-    isReady,
-    upsertCell,
-  } = useFormulaEngine({
-    bounds,
-    initialCells: initialFormulaCells,
-    visibleKeys,
+    batchUpsert: syncBatchUpsert,
+    lastRemoteLatencyMs,
+    peers,
+    status,
+    upsertCell: syncUpsertCell,
+  } = useCollaborationRoom({
+    initialCells: initialSeedCells,
+    onCellsChanged: handleCollaborativeCellChanges,
+    roomId: document.roomId,
+    selection,
+    session,
   });
+  const activeCellRecord = sheet.getCell(activeCell);
+  const activeCellRaw = getCellDisplayValue(activeCellRecord);
 
   const setNextWriteState = (nextWriteState: WriteState) => {
     writeStateRef.current = nextWriteState;
@@ -429,19 +480,12 @@ export function VirtualizedSheet({
   const writeCell = (address: CellAddress, value: string) => {
     const key = createCellKey(address);
 
-    if (value.trim() === "") {
-      sheet.clearCell(address);
-      deleteCell(key);
-    } else {
-      sheet.setCell(address, value);
-      upsertCell({
-        key,
-        raw: value,
-      });
-    }
-
-    setSheetRevision((current) => current + 1);
+    syncUpsertCell({
+      key,
+      raw: value,
+    });
     scheduleWriteConfirmation();
+    touchDocument(document.id);
   };
 
   const clearSelectionContents = () => {
@@ -474,9 +518,9 @@ export function VirtualizedSheet({
       return;
     }
 
-    setSheetRevision((current) => current + 1);
-    batchUpsert(clearedKeys);
+    syncBatchUpsert(clearedKeys);
     scheduleWriteConfirmation();
+    touchDocument(document.id);
   };
 
   const startEditing = (
@@ -744,9 +788,7 @@ export function VirtualizedSheet({
       return;
     }
 
-    sheet.batchPaste(selectionBounds.start, matrix);
-    setSheetRevision((current) => current + 1);
-    batchUpsert(
+    syncBatchUpsert(
       matrix.flatMap((rowValues, rowOffset) =>
         rowValues.map((value, colOffset) => ({
           key: createCellKey({
@@ -758,6 +800,7 @@ export function VirtualizedSheet({
       )
     );
     scheduleWriteConfirmation();
+    touchDocument(document.id);
 
     const rowCount = matrix.length;
     const colCount = Math.max(...matrix.map((row) => row.length), 1);
@@ -865,6 +908,15 @@ export function VirtualizedSheet({
         </div>
         <div className="flex flex-wrap items-center gap-3 font-mono">
           <span>{isReady ? "Formulas ready" : "Formulas warming"}</span>
+          <span>{status}</span>
+          {lastRemoteLatencyMs != null ? (
+            <span>remote {lastRemoteLatencyMs}ms</span>
+          ) : null}
+          {peers.length > 0 ? (
+            <span>
+              {peers.length} collaborator{peers.length === 1 ? "" : "s"}
+            </span>
+          ) : null}
           <span>{formatWriteState(writeState)}</span>
           <span>{bounds.rowCount.toLocaleString()} rows</span>
           <span>{bounds.colCount.toLocaleString()} cols</span>
@@ -907,6 +959,20 @@ export function VirtualizedSheet({
             ref={formulaBarRef}
             value={formulaBarValue}
           />
+          <div className="flex flex-wrap items-center gap-2">
+            {peers.map((peer) => (
+              <span
+                className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-[rgba(248,250,251,0.92)] px-3 py-1 text-[0.78rem] text-[var(--foreground)]"
+                key={peer.userId}
+              >
+                <span
+                  className="h-2.5 w-2.5 rounded-full"
+                  style={{ backgroundColor: peer.color }}
+                />
+                {peer.displayName}
+              </span>
+            ))}
+          </div>
         </div>
       </div>
 
