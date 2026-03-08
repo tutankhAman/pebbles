@@ -26,9 +26,11 @@ import type { SessionIdentity } from "@/types/metadata";
 import type { CellFormatRecord, CellRecord } from "@/types/spreadsheet";
 
 const ROOM_CHANNEL_PREFIX = "pebbles-room:";
+const PERSIST_DELAY_MS = 240;
 const REMOTE_AWARENESS_ORIGIN = "pebbles-remote-awareness";
 const REMOTE_SYNC_ORIGIN = "pebbles-remote-sync";
 const TRAILING_SLASH_PATTERN = /\/$/;
+const TRANSACTION_BATCH_SIZE = 1000;
 const STATUS_SETTLE_DELAY_MS = 180;
 const WEBSOCKET_BASE_URL = process.env.NEXT_PUBLIC_API_URL;
 const YJS_SYNC_ORIGIN = "pebbles-broadcast-sync";
@@ -55,6 +57,7 @@ type BroadcastMessage =
     };
 
 interface CollaborationSnapshot {
+  changeSource: "initial" | "local" | "presence" | "remote" | "status";
   columnOrder: number[];
   columnWidths: Map<number, number>;
   formats: Map<string, CellFormatRecord>;
@@ -152,8 +155,11 @@ export class BroadcastCollaborationRoom {
     return this.isDestroyed;
   }
   private lastRemoteLatencyMs: number | null = null;
+  private persistTimerId: number | null = null;
   private reconnectTimerId: number | null = null;
   private snapshot: CollaborationSnapshot;
+  private snapshotChangeSource: CollaborationSnapshot["changeSource"] =
+    "initial";
   private socket: WebSocket | null = null;
   private socketReconnectAttempt = 0;
   private socketReconnectTimerId: number | null = null;
@@ -202,21 +208,32 @@ export class BroadcastCollaborationRoom {
       return;
     }
 
-    this.doc.transact(() => {
-      for (const cell of cells) {
-        if (cell.raw.trim() === "") {
-          this.cells.delete(cell.key);
-          continue;
-        }
+    for (
+      let startIndex = 0;
+      startIndex < cells.length;
+      startIndex += TRANSACTION_BATCH_SIZE
+    ) {
+      const cellBatch = cells.slice(
+        startIndex,
+        startIndex + TRANSACTION_BATCH_SIZE
+      );
 
-        this.cells.set(cell.key, {
-          kind: getCellKind(cell.raw),
-          raw: cell.raw,
-          updatedAt: Date.now(),
-          updatedBy: this.session.userId,
-        });
-      }
-    }, this.senderId);
+      this.doc.transact(() => {
+        for (const cell of cellBatch) {
+          if (cell.raw.trim() === "") {
+            this.cells.delete(cell.key);
+            continue;
+          }
+
+          this.cells.set(cell.key, {
+            kind: getCellKind(cell.raw),
+            raw: cell.raw,
+            updatedAt: Date.now(),
+            updatedBy: this.session.userId,
+          });
+        }
+      }, this.senderId);
+    }
   }
 
   deleteCell(cellKey: string) {
@@ -250,20 +267,31 @@ export class BroadcastCollaborationRoom {
       return;
     }
 
-    this.doc.transact(() => {
-      for (const entry of formats) {
-        if (entry.format == null) {
-          this.formats.delete(entry.key);
-          continue;
-        }
+    for (
+      let startIndex = 0;
+      startIndex < formats.length;
+      startIndex += TRANSACTION_BATCH_SIZE
+    ) {
+      const formatBatch = formats.slice(
+        startIndex,
+        startIndex + TRANSACTION_BATCH_SIZE
+      );
 
-        this.formats.set(entry.key, {
-          ...entry.format,
-          updatedAt: Date.now(),
-          updatedBy: this.session.userId,
-        });
-      }
-    }, this.senderId);
+      this.doc.transact(() => {
+        for (const entry of formatBatch) {
+          if (entry.format == null) {
+            this.formats.delete(entry.key);
+            continue;
+          }
+
+          this.formats.set(entry.key, {
+            ...entry.format,
+            updatedAt: Date.now(),
+            updatedBy: this.session.userId,
+          });
+        }
+      }, this.senderId);
+    }
   }
 
   setColumnWidth(column: number, width: number | null) {
@@ -309,6 +337,7 @@ export class BroadcastCollaborationRoom {
 
     this.isDestroyed = true;
     this.listeners.clear();
+    this.flushPersistedState();
     this.socket?.close();
     this.socket = null;
     this.awareness.destroy();
@@ -375,6 +404,8 @@ export class BroadcastCollaborationRoom {
           return;
         }
 
+        this.snapshotChangeSource = "presence";
+
         if (
           !this.isDestroyed &&
           origin !== REMOTE_AWARENESS_ORIGIN &&
@@ -428,7 +459,9 @@ export class BroadcastCollaborationRoom {
 
   private bindDocUpdates() {
     this.doc.on("update", (update: Uint8Array, origin: unknown) => {
-      persistRoomState(this.roomId, encodeStateAsUpdate(this.doc));
+      const isLocalChange = origin === this.senderId;
+
+      this.schedulePersistedState();
 
       if (
         !(
@@ -445,7 +478,12 @@ export class BroadcastCollaborationRoom {
         this.sendRemoteFrame(TRANSPORT_MESSAGE_TYPE.yjsUpdate, update);
       }
 
-      this.lastRemoteLatencyMs = this.computeRemoteLatency();
+      this.snapshotChangeSource = isLocalChange ? "local" : "remote";
+
+      if (!isLocalChange) {
+        this.lastRemoteLatencyMs = this.computeRemoteLatency();
+      }
+
       this.notify();
     });
   }
@@ -595,6 +633,7 @@ export class BroadcastCollaborationRoom {
     );
 
     return {
+      changeSource: this.snapshotChangeSource,
       columnOrder: this.columnOrder.toArray(),
       columnWidths: mapNumericEntries(this.columnWidths),
       formats: new Map(
@@ -687,8 +726,37 @@ export class BroadcastCollaborationRoom {
   }
 
   private setStatus(nextStatus: CollaborationStatus) {
+    this.snapshotChangeSource = "status";
     this.status = nextStatus;
     this.notify();
+  }
+
+  private flushPersistedState() {
+    if (!(this.doc && typeof window !== "undefined")) {
+      return;
+    }
+
+    if (this.persistTimerId !== null) {
+      window.clearTimeout(this.persistTimerId);
+      this.persistTimerId = null;
+    }
+
+    persistRoomState(this.roomId, encodeStateAsUpdate(this.doc));
+  }
+
+  private schedulePersistedState() {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    if (this.persistTimerId !== null) {
+      window.clearTimeout(this.persistTimerId);
+    }
+
+    this.persistTimerId = window.setTimeout(() => {
+      this.persistTimerId = null;
+      this.flushPersistedState();
+    }, PERSIST_DELAY_MS);
   }
 
   private notify() {

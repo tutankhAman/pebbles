@@ -26,9 +26,13 @@ export function loadPersistedRoomState(roomId: string) {
     return null;
   }
 
-  const encoded = window.localStorage.getItem(getStorageKey(roomId));
+  try {
+    const encoded = window.localStorage.getItem(getStorageKey(roomId));
 
-  return encoded ? decodeUpdate(encoded) : null;
+    return encoded ? decodeUpdate(encoded) : null;
+  } catch {
+    return null;
+  }
 }
 
 export function persistRoomState(roomId: string, update: Uint8Array) {
@@ -36,5 +40,10 @@ export function persistRoomState(roomId: string, update: Uint8Array) {
     return;
   }
 
-  window.localStorage.setItem(getStorageKey(roomId), encodeUpdate(update));
+  try {
+    window.localStorage.setItem(getStorageKey(roomId), encodeUpdate(update));
+  } catch {
+    // Local persistence is a best-effort cache. Quota or privacy-mode failures
+    // must not block live collaboration or remote room persistence.
+  }
 }
