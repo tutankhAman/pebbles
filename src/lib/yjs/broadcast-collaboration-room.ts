@@ -93,6 +93,10 @@ export class BroadcastCollaborationRoom {
   private readonly senderId = nextSenderId();
   private readonly session: SessionIdentity;
   private isDestroyed = false;
+
+  get destroyed() {
+    return this.isDestroyed;
+  }
   private lastRemoteLatencyMs: number | null = null;
   private reconnectTimerId: number | null = null;
   private snapshot: CollaborationSnapshot;
@@ -163,19 +167,26 @@ export class BroadcastCollaborationRoom {
   }
 
   destroy() {
+    if (this.isDestroyed) {
+      return;
+    }
+
     this.isDestroyed = true;
     this.listeners.clear();
     this.socket?.close();
+    this.socket = null;
     this.awareness.destroy();
     this.doc.destroy();
     this.channel.close();
 
     if (this.reconnectTimerId !== null) {
       window.clearTimeout(this.reconnectTimerId);
+      this.reconnectTimerId = null;
     }
 
     if (this.socketReconnectTimerId !== null) {
       window.clearTimeout(this.socketReconnectTimerId);
+      this.socketReconnectTimerId = null;
     }
   }
 
@@ -337,8 +348,21 @@ export class BroadcastCollaborationRoom {
   }
 
   private connectRemoteTransport() {
-    if (!(this.hasRemoteTransport() && navigator.onLine) || this.socket) {
+    if (!(this.hasRemoteTransport() && navigator.onLine)) {
       return;
+    }
+
+    if (this.socket) {
+      const { readyState } = this.socket;
+
+      if (
+        readyState === WebSocket.CONNECTING ||
+        readyState === WebSocket.OPEN
+      ) {
+        return;
+      }
+
+      this.socket = null;
     }
 
     const socket = new WebSocket(this.getRemoteTransportUrl());
@@ -381,9 +405,11 @@ export class BroadcastCollaborationRoom {
     };
 
     socket.onclose = () => {
-      if (this.socket === socket) {
-        this.socket = null;
+      if (this.socket !== socket) {
+        return;
       }
+
+      this.socket = null;
 
       if (
         !(this.isDestroyed || !navigator.onLine || !this.hasRemoteTransport())
@@ -533,31 +559,58 @@ export class BroadcastCollaborationRoom {
   }
 }
 
+const RELEASE_DEFER_MS = 100;
+
 const roomRegistry = new Map<string, BroadcastCollaborationRoom>();
+const roomRefCounts = new Map<string, number>();
+const roomReleaseTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 export function getOrCreateBroadcastCollaborationRoom(args: {
   roomId: string;
   session: SessionIdentity;
 }) {
+  const pendingRelease = roomReleaseTimers.get(args.roomId);
+
+  if (pendingRelease !== undefined) {
+    clearTimeout(pendingRelease);
+    roomReleaseTimers.delete(args.roomId);
+  }
+
   const existingRoom = roomRegistry.get(args.roomId);
 
-  if (existingRoom) {
+  if (existingRoom && !existingRoom.destroyed) {
     existingRoom.setPresence(createLocalPresence(args.session));
+    roomRefCounts.set(args.roomId, (roomRefCounts.get(args.roomId) ?? 0) + 1);
     return existingRoom;
   }
 
   const room = new BroadcastCollaborationRoom(args);
   roomRegistry.set(args.roomId, room);
+  roomRefCounts.set(args.roomId, 1);
   return room;
 }
 
 export function releaseBroadcastCollaborationRoom(roomId: string) {
-  const room = roomRegistry.get(roomId);
+  const count = (roomRefCounts.get(roomId) ?? 1) - 1;
+  roomRefCounts.set(roomId, count);
 
-  if (!room) {
+  if (count > 0) {
     return;
   }
 
-  room.destroy();
-  roomRegistry.delete(roomId);
+  const timerId = setTimeout(() => {
+    roomReleaseTimers.delete(roomId);
+
+    const room = roomRegistry.get(roomId);
+
+    if (!room) {
+      return;
+    }
+
+    room.destroy();
+    roomRegistry.delete(roomId);
+    roomRefCounts.delete(roomId);
+  }, RELEASE_DEFER_MS);
+
+  roomReleaseTimers.set(roomId, timerId);
 }

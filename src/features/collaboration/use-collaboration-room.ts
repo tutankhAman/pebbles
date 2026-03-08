@@ -90,16 +90,22 @@ export function useCollaborationRoom(args: {
   selection: Selection;
   session: SessionIdentity | null;
 }) {
+  const sessionRef = useRef(args.session);
+  sessionRef.current = args.session;
+  const sessionUserId = args.session?.userId ?? null;
+
   const room = useMemo(() => {
-    if (!args.session) {
+    const session = sessionRef.current;
+
+    if (!(session && sessionUserId)) {
       return null;
     }
 
     return getOrCreateBroadcastCollaborationRoom({
       roomId: args.roomId,
-      session: args.session,
+      session,
     });
-  }, [args.roomId, args.session]);
+  }, [args.roomId, sessionUserId]);
   const handleCellChanges = useEffectEvent(args.onCellsChanged);
   const previousValuesRef = useRef<Map<string, CellRecord>>(new Map());
 
@@ -109,21 +115,38 @@ export function useCollaborationRoom(args: {
     () => EMPTY_SNAPSHOT
   );
 
+  const hasSeedRef = useRef(false);
+
   useEffect(() => {
     if (!room) {
       previousValuesRef.current = new Map();
+      hasSeedRef.current = false;
       return;
-    }
-
-    if (room.getSnapshot().values.size === 0 && args.initialCells.length > 0) {
-      room.batchUpsert(args.initialCells);
     }
 
     return () => {
       previousValuesRef.current = new Map();
+      hasSeedRef.current = false;
       releaseBroadcastCollaborationRoom(args.roomId);
     };
-  }, [args.initialCells, args.roomId, room]);
+  }, [args.roomId, room]);
+
+  useEffect(() => {
+    if (
+      !room ||
+      hasSeedRef.current ||
+      args.initialCells.length === 0 ||
+      snapshot.status === "connecting"
+    ) {
+      return;
+    }
+
+    if (snapshot.values.size === 0) {
+      room.batchUpsert(args.initialCells);
+    }
+
+    hasSeedRef.current = true;
+  }, [args.initialCells, room, snapshot.status, snapshot.values.size]);
 
   useEffect(() => {
     const changes: CollaborationCellChange[] = [];
