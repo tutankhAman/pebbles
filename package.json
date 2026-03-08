@@ -13,6 +13,8 @@
     "prepare": "husky"
   },
   "dependencies": {
+    "@instantdb/react": "^0.22.155",
+    "firebase": "^12.10.0",
     "next": "16.1.6",
     "react": "19.2.3",
     "react-dom": "19.2.3"
