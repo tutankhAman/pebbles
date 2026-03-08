@@ -1,36 +1,92 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Pebbles
 
-## Getting Started
+Lightweight real-time collaborative spreadsheet built for the Trademarkia frontend engineering assignment.
 
-First, run the development server:
+## Current Status
+
+Phase `0` is complete:
+
+- Next.js App Router scaffold is in place
+- strict TypeScript, Tailwind, Biome/Ultracite, and build scripts are configured
+- route skeleton exists for dashboard and document editor
+- shared contracts exist for metadata, spreadsheet, collaboration, worker, and UI state
+- architecture and planning docs live under [`context/`](./context)
+
+## Architecture
+
+Core design:
+
+- `Firebase Auth` for identity
+- `InstantDB` for metadata only
+- `Yjs` for live collaborative state and presence
+- `HyperFormula` in a dedicated worker for formulas
+- `Zustand` for ephemeral UI state
+
+Reference docs:
+
+- [Plan](./context/PLAN.md)
+- [Architecture](./context/ARCHITECTURE.md)
+- [Multi-Agent Plan](./context/MULTI_AGENT_PLAN.md)
+- [Phase Execution Matrix](./context/PHASE_EXECUTION_MATRIX.md)
+
+## Setup
+
+Install dependencies and start the development server:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+bun install
+bun run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open `http://localhost:3000`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Scripts
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+bun run dev
+bun run typecheck
+bun run lint
+bun run build
+bun run fix
+```
 
-## Learn More
+## Project Structure
 
-To learn more about Next.js, take a look at the following resources:
+```text
+src/
+  app/
+    dashboard/
+    documents/[documentId]/
+  providers/
+  types/
+context/
+  PLAN.md
+  ARCHITECTURE.md
+  MULTI_AGENT_PLAN.md
+  PHASE_EXECUTION_MATRIX.md
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Tradeoffs
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- The submission is assignment-focused, not product-complete.
+- Metadata and live collaboration are intentionally split.
+- Snapshot/versioning/object storage are deferred.
+- Formula scope will stay intentionally narrow even with HyperFormula.
 
-## Deploy on Vercel
+## Demo Notes
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Planned demo flow:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- open dashboard
+- create or open a document
+- open the same document in two tabs
+- show live collaboration, presence, and write-state behavior
+- show `SUM` and basic arithmetic formulas
+
+## Submission Checklist
+
+- [ ] private GitHub repo
+- [ ] deploy URL
+- [ ] access granted to `recruitments@trademarkia.com`
+- [ ] demo video
+- [ ] architecture and tradeoffs documented
