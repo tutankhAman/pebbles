@@ -51,12 +51,12 @@ function AuthOnboardingModal() {
 
   return (
     <div className="pointer-events-auto fixed inset-0 z-50 flex items-center justify-center bg-[rgba(19,34,26,0.22)] p-4 backdrop-blur-md sm:p-6">
-      <div className="relative w-full max-w-5xl overflow-hidden border border-[var(--border-strong)] bg-[linear-gradient(135deg,rgba(248,252,246,0.98),rgba(233,244,231,0.96))] shadow-[0_34px_120px_rgba(23,50,39,0.18)]">
+      <div className="relative w-full max-w-5xl overflow-hidden border border-[var(--border-strong)] bg-[linear-gradient(135deg,rgba(248,252,246,0.98),rgba(233,244,231,0.96))] shadow-[0_34px_120px_rgba(23,50,39,0.18)] xl:max-w-[min(78vw,90rem)]">
         <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(rgba(23,50,39,0.05)_1px,transparent_1px),linear-gradient(90deg,rgba(23,50,39,0.05)_1px,transparent_1px)] bg-[size:88px_88px] opacity-40" />
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(128,239,128,0.3),transparent_30%),radial-gradient(circle_at_82%_18%,rgba(190,214,181,0.48),transparent_26%)]" />
 
         <div className="relative grid lg:grid-cols-[1.15fr_0.85fr]">
-          <section className="flex flex-col justify-between border-[var(--border)] border-b px-7 py-8 sm:px-10 sm:py-10 lg:min-h-[38rem] lg:border-r lg:border-b-0 lg:px-14 lg:py-14">
+          <section className="flex flex-col justify-between border-[var(--border)] border-b px-7 py-8 sm:px-10 sm:py-10 lg:min-h-[38rem] lg:border-r lg:border-b-0 lg:px-14 lg:py-14 xl:min-h-[min(42vw,46rem)] xl:px-[clamp(2.75rem,3.2vw,4.25rem)] xl:py-[clamp(2.25rem,2.8vw,3.5rem)]">
             <div className="space-y-10">
               <div className="flex flex-wrap items-center gap-3 text-[0.72rem] text-[var(--muted)] uppercase tracking-[0.28em]">
                 <span className="border border-[var(--border-strong)] px-3 py-2 text-[var(--foreground)]">
@@ -66,10 +66,10 @@ function AuthOnboardingModal() {
               </div>
 
               <div className="space-y-6">
-                <h2 className="max-w-2xl text-4xl leading-[0.96] sm:text-5xl">
+                <h2 className="max-w-2xl text-4xl leading-[0.96] sm:text-5xl xl:text-[clamp(2.3rem,2.45vw,3.5rem)]">
                   Enter Pebbles with a stable identity the room can trust.
                 </h2>
-                <p className="max-w-2xl text-[0.95rem] text-[var(--muted)] leading-8 sm:text-[1rem]">
+                <p className="max-w-2xl text-[0.95rem] text-[var(--muted)] leading-8 sm:text-[1rem] xl:text-[clamp(0.8rem,0.78vw,1rem)] xl:leading-[1.85]">
                   Presence indicators, collaborator state, and durable document
                   joins all depend on a real session identity. Continue with
                   Google for account-backed access or define a guest name that
@@ -106,10 +106,10 @@ function AuthOnboardingModal() {
                   <p className="text-[0.68rem] text-[var(--muted)] uppercase tracking-[0.22em]">
                     {item.label}
                   </p>
-                  <p className="font-medium text-[0.94rem] text-[var(--foreground)] leading-6">
+                  <p className="font-medium text-[0.94rem] text-[var(--foreground)] leading-6 xl:text-[clamp(0.76rem,0.72vw,0.95rem)] xl:leading-[1.45]">
                     {item.value}
                   </p>
-                  <p className="text-[0.78rem] text-[var(--muted)] leading-6">
+                  <p className="text-[0.78rem] text-[var(--muted)] leading-6 xl:text-[clamp(0.66rem,0.62vw,0.82rem)] xl:leading-[1.55]">
                     {item.detail}
                   </p>
                 </div>
@@ -117,13 +117,13 @@ function AuthOnboardingModal() {
             </div>
           </section>
 
-          <section className="bg-[linear-gradient(180deg,rgba(228,239,226,0.82),rgba(248,252,246,0.96))] px-7 py-8 sm:px-10 sm:py-10 lg:px-12 lg:py-12">
+          <section className="bg-[linear-gradient(180deg,rgba(228,239,226,0.82),rgba(248,252,246,0.96))] px-7 py-8 sm:px-10 sm:py-10 lg:px-12 lg:py-12 xl:px-[clamp(2.5rem,2.8vw,3.5rem)] xl:py-[clamp(2.25rem,2.6vw,3.25rem)]">
             <div className="border border-[var(--border-strong)] bg-[rgba(248,252,246,0.9)] shadow-[0_20px_60px_rgba(23,50,39,0.08)]">
               <div className="border-[var(--border)] border-b px-6 py-5 sm:px-8">
                 <p className="text-[0.68rem] text-[var(--muted)] uppercase tracking-[0.24em]">
                   Access
                 </p>
-                <h3 className="mt-3 text-2xl leading-tight">
+                <h3 className="mt-3 text-2xl leading-tight xl:text-[clamp(1.35rem,1.5vw,2rem)]">
                   Pick how this browser should appear in collaborative rooms.
                 </h3>
               </div>
@@ -136,21 +136,21 @@ function AuthOnboardingModal() {
                   <label className="block" htmlFor={formId}>
                     <span className="sr-only">Guest display name</span>
                     <input
-                      className="w-full border border-[var(--border)] bg-white px-5 py-4 text-[15px] outline-none transition-colors placeholder:text-[var(--muted)]/70 focus:border-[var(--accent)]"
+                      className="w-full border border-[var(--border)] bg-white px-5 py-4 text-[15px] outline-none transition-colors placeholder:text-[var(--muted)]/70 focus:border-[var(--accent)] xl:px-[clamp(1rem,1.15vw,1.35rem)] xl:py-[clamp(0.8rem,0.95vw,1.05rem)] xl:text-[clamp(0.8rem,0.72vw,0.96rem)]"
                       id={formId}
                       onChange={(event) => setDisplayName(event.target.value)}
                       placeholder="Ada Lovelace"
                       value={displayName}
                     />
                   </label>
-                  <p className="text-[0.8rem] text-[var(--muted)] leading-6">
+                  <p className="text-[0.8rem] text-[var(--muted)] leading-6 xl:text-[clamp(0.68rem,0.62vw,0.84rem)] xl:leading-[1.55]">
                     Use a clear name so selections, edits, and presence badges
                     remain readable to everyone in the sheet.
                   </p>
                 </div>
 
                 <button
-                  className="inline-flex min-h-14 w-full items-center justify-center border border-[var(--accent)] bg-[var(--accent)] px-5 text-sm text-white uppercase tracking-[0.22em] transition-colors hover:bg-transparent hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-60"
+                  className="inline-flex min-h-14 w-full items-center justify-center border border-[var(--accent)] bg-[var(--accent)] px-5 text-sm text-white uppercase tracking-[0.22em] transition-colors hover:bg-transparent hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-60 xl:min-h-[clamp(2.7rem,2.8vw,3.25rem)] xl:px-[clamp(1rem,1.2vw,1.4rem)] xl:text-[clamp(0.68rem,0.62vw,0.84rem)]"
                   disabled={isGuestDisabled}
                   onClick={() => {
                     startGuestTransition(() => {
@@ -173,7 +173,7 @@ function AuthOnboardingModal() {
                 </div>
 
                 <button
-                  className="inline-flex min-h-14 w-full items-center justify-center border border-[var(--border-strong)] bg-[rgba(255,255,255,0.78)] px-5 text-[var(--foreground)] text-sm uppercase tracking-[0.22em] transition-colors hover:border-[var(--foreground)] hover:bg-[rgba(255,255,255,0.98)] disabled:cursor-not-allowed disabled:opacity-60"
+                  className="inline-flex min-h-14 w-full items-center justify-center border border-[var(--border-strong)] bg-[rgba(255,255,255,0.78)] px-5 text-[var(--foreground)] text-sm uppercase tracking-[0.22em] transition-colors hover:border-[var(--foreground)] hover:bg-[rgba(255,255,255,0.98)] disabled:cursor-not-allowed disabled:opacity-60 xl:min-h-[clamp(2.7rem,2.8vw,3.25rem)] xl:px-[clamp(1rem,1.2vw,1.4rem)] xl:text-[clamp(0.68rem,0.62vw,0.84rem)]"
                   disabled={!isConfigured || isPending}
                   onClick={signInWithGoogle}
                   type="button"
@@ -184,7 +184,7 @@ function AuthOnboardingModal() {
                 </button>
 
                 <div className="border border-[var(--border)] bg-[rgba(255,255,255,0.56)] px-5 py-4">
-                  <p className="text-[0.78rem] text-[var(--muted)] leading-6">
+                  <p className="text-[0.78rem] text-[var(--muted)] leading-6 xl:text-[clamp(0.66rem,0.62vw,0.82rem)] xl:leading-[1.55]">
                     Direct document joins stay blocked until identity is
                     selected, so every room session starts with a real
                     collaborator attached to it.
