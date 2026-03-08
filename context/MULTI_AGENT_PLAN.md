@@ -22,6 +22,9 @@ This split assumes the current architecture:
 - Workers must not rewrite another agent's files.
 - The main agent handles integration, conflict resolution, final verification, and documentation.
 - Workers should assume other agents are editing the codebase in parallel and must not revert their changes.
+- Agents should make regular small commits after completing a coherent task slice.
+- Avoid one giant end-of-stream commit; prefer commit boundaries that match checklist milestones.
+- Before each commit, make sure the touched surface is in a sane handoff state.
 
 ## Shared Contracts To Lock First
 
@@ -104,6 +107,7 @@ Important rules:
 - do not revert their changes
 - if a contract must change, update the contract and adapt integration points cleanly
 - keep code simple and assignment-focused
+- make regular small commits after coherent task completion instead of one large final commit
 
 Primary deliverables:
 - shared types and route skeleton
@@ -176,6 +180,7 @@ Do not edit:
 - shared contracts unless integration requires coordination
 
 Other workers are editing in parallel. Do not revert their work.
+Make regular small commits after coherent task completion so the integration history stays readable.
 
 Deliver:
 - Google sign-in
@@ -257,6 +262,7 @@ Do not edit:
 - shared contracts unless required for integration
 
 Other workers are editing in parallel. Do not revert their work.
+Make regular small commits after coherent task completion so the integration history stays readable.
 
 Deliver:
 - fast visible-window rendering
@@ -335,6 +341,7 @@ Do not edit:
 - shared contracts unless required for integration
 
 Other workers are editing in parallel. Do not revert their work.
+Make regular small commits after coherent task completion so the integration history stays readable.
 
 Deliver:
 - stable Yjs room join flow
@@ -411,6 +418,7 @@ Do not edit:
 - shared contracts unless required for integration
 
 Other workers are editing in parallel. Do not revert their work.
+Make regular small commits after coherent task completion so the integration history stays readable.
 
 Deliver:
 - stable worker protocol
@@ -477,6 +485,7 @@ Your job is to improve:
 - README/demo clarity
 
 Other workers are editing in parallel. Do not revert their work.
+Make regular small commits after coherent task completion so the integration history stays readable.
 
 List every file you changed in your final message.
 ```
