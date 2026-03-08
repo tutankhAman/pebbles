@@ -27,6 +27,7 @@ export interface ShortcutHandlerArgs {
   insertColumn: (placement: "left" | "right") => void;
   insertRow: (placement: "above" | "below") => void;
   openRenameDialog: () => void;
+  openSearchPanel: () => void;
   redoSelectionChange: () => void;
   setActiveHelpPanel: Dispatch<SetStateAction<HelpPanel | null>>;
   setFreezeFirstColumn: Dispatch<SetStateAction<boolean>>;
@@ -68,6 +69,12 @@ export function handleMetaShortcuts(args: ShortcutHandlerArgs) {
   if (isModifierPressed && lowerKey === "x") {
     args.event.preventDefault();
     args.cutSelectionContents().catch(() => undefined);
+    return true;
+  }
+
+  if (isModifierPressed && lowerKey === "f") {
+    args.event.preventDefault();
+    args.openSearchPanel();
     return true;
   }
 

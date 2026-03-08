@@ -75,6 +75,7 @@ import {
   commitHeaderDrag,
   createSeededSheet,
   downloadExport,
+  findCellMatches,
   formatWriteState,
   getCellDisplayValue,
   getCellKind,
@@ -85,7 +86,9 @@ import {
   getSnapshotChanges,
   getToolbarButtonClassName,
   hasSnapshotChanges,
+  type SearchMatch,
   sanitizeFileName,
+  sortRowsByColumn,
 } from "@/features/spreadsheet/virtualized-sheet-helpers";
 import {
   handleFormatAndInsertShortcuts,
@@ -108,6 +111,9 @@ import {
   createShortcutLabel,
   MenuButton,
   MenuItem,
+  SearchIcon,
+  SortAscendingIcon,
+  SortDescendingIcon,
   VirtualCell,
 } from "@/features/spreadsheet/virtualized-sheet-ui";
 import { renameDocument, touchDocument } from "@/lib/metadata/metadata-store";
@@ -152,6 +158,7 @@ export function VirtualizedSheet({
   const sheetRef = useRef<SparseSheet | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const formulaBarRef = useRef<HTMLInputElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const keyboardProxyRef = useRef<HTMLTextAreaElement | null>(null);
   const pointerAnchorRef = useRef<CellAddress | null>(null);
   const clipboardTextRef = useRef("");
@@ -166,7 +173,7 @@ export function VirtualizedSheet({
     future: [],
     past: [],
   });
-  const [, setCellRevision] = useState(0);
+  const [cellRevision, setCellRevision] = useState(0);
   const [selection, setSelection] = useState<Selection>(() =>
     createCellSelection(DEFAULT_SELECTION)
   );
@@ -190,6 +197,10 @@ export function VirtualizedSheet({
   const [showCrosshairHighlight, setShowCrosshairHighlight] = useState(true);
   const [freezeTopRow, setFreezeTopRow] = useState(false);
   const [freezeFirstColumn, setFreezeFirstColumn] = useState(false);
+  const [isSearchPanelOpen, setIsSearchPanelOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [replaceValue, setReplaceValue] = useState("");
+  const [isSearchCaseSensitive, setIsSearchCaseSensitive] = useState(false);
   const [isRenameDialogOpen, setIsRenameDialogOpen] = useState(false);
   const [renameDraft, setRenameDraft] = useState(document.title);
 
@@ -251,6 +262,13 @@ export function VirtualizedSheet({
   );
   const visibleColumns = visibleColumnsSlice.items;
   const visibleRows = visibleRowsSlice.items;
+  const cellsSnapshot = useMemo(() => {
+    if (cellRevision < 0) {
+      return new Map();
+    }
+
+    return sheet.getCells();
+  }, [cellRevision, sheet]);
   const selectionMembers = useMemo(
     () => getSelectionMembers(selection, columnLayout, rowLayout),
     [columnLayout, rowLayout, selection]
@@ -271,6 +289,32 @@ export function VirtualizedSheet({
   const selectedRowSet = useMemo(
     () => new Set(selectionMembers.rows),
     [selectionMembers.rows]
+  );
+  const isFullRowSelection = selectedColumnSet.size === bounds.colCount;
+  const isFullColumnSelection = selectedRowSet.size === bounds.rowCount;
+  const populatedRows = useMemo(() => {
+    const usedRows = new Set<number>();
+
+    for (const key of cellsSnapshot.keys()) {
+      usedRows.add(parseCellKey(key).row);
+    }
+
+    return sheet.getRowOrder().filter((row) => usedRows.has(row));
+  }, [cellsSnapshot, sheet]);
+  const searchMatches = useMemo(
+    () =>
+      isSearchPanelOpen
+        ? findCellMatches({
+            caseSensitive: isSearchCaseSensitive,
+            cells: cellsSnapshot,
+            query: searchQuery,
+          })
+        : ([] as SearchMatch[]),
+    [cellsSnapshot, isSearchCaseSensitive, isSearchPanelOpen, searchQuery]
+  );
+  const activeSearchMatchIndex = useMemo(
+    () => searchMatches.findIndex((match) => match.key === activeCellKey),
+    [activeCellKey, searchMatches]
   );
   const seededSheetSnapshot = useMemo(
     () => createSeededSheet(document).snapshot(),
@@ -385,6 +429,13 @@ export function VirtualizedSheet({
 
   const closeMenus = () => {
     setActiveMenu(null);
+  };
+  const openSearchPanel = () => {
+    setIsSearchPanelOpen(true);
+    closeMenus();
+  };
+  const closeSearchPanel = () => {
+    setIsSearchPanelOpen(false);
   };
   const pushHistoryState = (entry: HistoryState) => {
     const nextPast = [...historyRef.current.past, entry].slice(-40);
@@ -735,10 +786,31 @@ export function VirtualizedSheet({
     }
   };
 
-  const applySelection = (nextSelection: Selection) => {
+  const applySelection = (
+    nextSelection: Selection,
+    visibleAddress?: CellAddress
+  ) => {
     setSelection(nextSelection);
     ensureCellVisible(
-      nextSelection.type === "cell" ? nextSelection.anchor : nextSelection.end
+      visibleAddress ??
+        (nextSelection.type === "cell"
+          ? nextSelection.anchor
+          : nextSelection.end)
+    );
+  };
+  const selectColumn = (column: number) => {
+    applySelection(
+      createRangeSelection(
+        { col: column, row: 1 },
+        { col: column, row: bounds.rowCount }
+      ),
+      { col: column, row: activeCell.row }
+    );
+  };
+  const selectRow = (row: number) => {
+    applySelection(
+      createRangeSelection({ col: 1, row }, { col: bounds.colCount, row }),
+      { col: activeCell.col, row }
     );
   };
 
@@ -876,6 +948,15 @@ export function VirtualizedSheet({
   }, [editingAddress, editingSurface]);
 
   useEffect(() => {
+    if (!isSearchPanelOpen) {
+      return;
+    }
+
+    searchInputRef.current?.focus();
+    searchInputRef.current?.select();
+  }, [isSearchPanelOpen]);
+
+  useEffect(() => {
     onWriteStateChange?.("idle");
   }, [onWriteStateChange]);
 
@@ -906,6 +987,7 @@ export function VirtualizedSheet({
         setActiveMenu(null);
         setActiveHelpPanel(null);
         setIsRenameDialogOpen(false);
+        setIsSearchPanelOpen(false);
       }
     };
 
@@ -1171,6 +1253,46 @@ export function VirtualizedSheet({
     keyboardProxyRef.current?.focus();
     startEditing(nextAddress);
   };
+  const handleColumnHeaderPointerDown = (
+    event: ReactPointerEvent<HTMLDivElement>,
+    column: number
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    keyboardProxyRef.current?.focus();
+
+    if (isFullColumnSelection && selectedColumnSet.has(column)) {
+      setHeaderDragState({
+        axis: "col",
+        sourceLogicalIndex: column,
+        targetLogicalIndex: column,
+        type: "reorder",
+      });
+      return;
+    }
+
+    selectColumn(column);
+  };
+  const handleRowHeaderPointerDown = (
+    event: ReactPointerEvent<HTMLDivElement>,
+    row: number
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    keyboardProxyRef.current?.focus();
+
+    if (isFullRowSelection && selectedRowSet.has(row)) {
+      setHeaderDragState({
+        axis: "row",
+        sourceLogicalIndex: row,
+        targetLogicalIndex: row,
+        type: "reorder",
+      });
+      return;
+    }
+
+    selectRow(row);
+  };
 
   const handleKeyDown = (
     event: KeyboardEvent<HTMLDivElement | HTMLTextAreaElement>
@@ -1188,6 +1310,7 @@ export function VirtualizedSheet({
       insertColumn,
       insertRow,
       openRenameDialog,
+      openSearchPanel,
       redoSelectionChange,
       setActiveHelpPanel,
       setFreezeFirstColumn,
@@ -1375,6 +1498,30 @@ export function VirtualizedSheet({
     });
   };
 
+  const sortSelectionRows = (direction: "asc" | "desc") => {
+    const targetRows =
+      selectionMembers.rows.length > 1 ? selectionMembers.rows : populatedRows;
+
+    if (targetRows.length < 2) {
+      return;
+    }
+
+    const nextRowOrder = sortRowsByColumn({
+      direction,
+      preserveFirstRow: targetRows.includes(1),
+      rowOrder: sheet.getRowOrder(),
+      rows: targetRows,
+      sheet,
+      sortColumn: activeCell.col,
+    });
+
+    commitTrackedSheetMutation({
+      mutation: () => {
+        sheet.setRowOrder(nextRowOrder);
+      },
+    });
+  };
+
   const insertRow = (placement: "above" | "below") => {
     const targetRow =
       placement === "above"
@@ -1457,6 +1604,98 @@ export function VirtualizedSheet({
     setRenameDraft(document.title);
     setIsRenameDialogOpen(true);
     closeMenus();
+  };
+
+  const escapeSearchPattern = (value: string) =>
+    value.replaceAll(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+
+  const replaceSearchValue = (value: string, replaceAll: boolean) => {
+    if (searchQuery.trim() === "") {
+      return value;
+    }
+
+    const pattern = new RegExp(
+      escapeSearchPattern(searchQuery),
+      `${replaceAll ? "g" : ""}${isSearchCaseSensitive ? "" : "i"}`
+    );
+
+    return value.replace(pattern, replaceValue);
+  };
+
+  const jumpToSearchMatch = (direction: "next" | "previous") => {
+    if (searchMatches.length === 0) {
+      return;
+    }
+
+    const delta = direction === "next" ? 1 : -1;
+    let nextIndex =
+      (activeSearchMatchIndex + delta + searchMatches.length) %
+      searchMatches.length;
+
+    if (activeSearchMatchIndex === -1) {
+      nextIndex = direction === "next" ? 0 : searchMatches.length - 1;
+    }
+    const nextMatch = searchMatches[nextIndex];
+
+    if (!nextMatch) {
+      return;
+    }
+
+    applySelection(createCellSelection(parseCellKey(nextMatch.key)));
+  };
+
+  const replaceCurrentSearchMatch = () => {
+    const targetMatch =
+      activeSearchMatchIndex === -1
+        ? searchMatches[0]
+        : searchMatches[activeSearchMatchIndex];
+
+    if (!targetMatch) {
+      return;
+    }
+
+    const nextRaw = replaceSearchValue(targetMatch.raw, false);
+
+    if (nextRaw === targetMatch.raw) {
+      jumpToSearchMatch("next");
+      return;
+    }
+
+    commitTrackedSheetMutation({
+      mutation: () => {
+        sheet.setCellByKey(targetMatch.key, nextRaw);
+      },
+      nextSelection: createCellSelection(parseCellKey(targetMatch.key)),
+    });
+  };
+
+  const replaceAllSearchMatches = () => {
+    if (searchMatches.length === 0) {
+      return;
+    }
+
+    const replacements = searchMatches
+      .map((match) => ({
+        key: match.key,
+        nextRaw: replaceSearchValue(match.raw, true),
+      }))
+      .filter((entry) => {
+        const currentRaw = sheet.getCellByKey(entry.key)?.raw ?? "";
+        return entry.nextRaw !== currentRaw;
+      });
+
+    if (replacements.length === 0) {
+      return;
+    }
+
+    commitTrackedSheetMutation({
+      mutation: () => {
+        for (const replacement of replacements) {
+          sheet.setCellByKey(replacement.key, replacement.nextRaw);
+        }
+      },
+      nextSelection: createCellSelection(parseCellKey(replacements[0].key)),
+    });
   };
 
   const submitRename = async () => {
@@ -1662,6 +1901,25 @@ export function VirtualizedSheet({
                     closeMenus();
                   }}
                   shortcut="Mod+V"
+                />
+                <MenuItem
+                  label="Find and replace"
+                  onClick={openSearchPanel}
+                  shortcut="Mod+F"
+                />
+                <MenuItem
+                  label="Sort ascending"
+                  onClick={() => {
+                    sortSelectionRows("asc");
+                    closeMenus();
+                  }}
+                />
+                <MenuItem
+                  label="Sort descending"
+                  onClick={() => {
+                    sortSelectionRows("desc");
+                    closeMenus();
+                  }}
                 />
                 <MenuItem
                   label="Clear cells"
@@ -2150,7 +2408,148 @@ export function VirtualizedSheet({
               </button>
             ))}
           </div>
+
+          <div className="flex items-center gap-0.5 bg-white p-[0.1875rem] shadow-sm ring-1 ring-[#e0e3e7]">
+            <button
+              aria-label={`Sort rows ascending by ${getColumnHeaderLabel(activeCell.col)}`}
+              className={getToolbarButtonClassName(false)}
+              onClick={() => {
+                sortSelectionRows("asc");
+              }}
+              title={`Sort ascending by ${getColumnHeaderLabel(activeCell.col)}`}
+              type="button"
+            >
+              <SortAscendingIcon />
+            </button>
+            <button
+              aria-label={`Sort rows descending by ${getColumnHeaderLabel(activeCell.col)}`}
+              className={getToolbarButtonClassName(false)}
+              onClick={() => {
+                sortSelectionRows("desc");
+              }}
+              title={`Sort descending by ${getColumnHeaderLabel(activeCell.col)}`}
+              type="button"
+            >
+              <SortDescendingIcon />
+            </button>
+            <button
+              aria-label="Find and replace"
+              className={getToolbarButtonClassName(isSearchPanelOpen)}
+              onClick={() => {
+                setIsSearchPanelOpen((current) => !current);
+              }}
+              title="Find and replace"
+              type="button"
+            >
+              <SearchIcon />
+            </button>
+          </div>
         </div>
+        {isSearchPanelOpen ? (
+          <div className="grid gap-2 border-[#e0e0e0] border-t bg-white px-3 py-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="flex min-w-[15rem] flex-1 items-center gap-2 border border-[#d2d7de] bg-[#f8fafc] px-2.5 py-1.5 text-[#444746] text-[0.75rem] shadow-sm">
+                <SearchIcon />
+                <span className="sr-only">Find text</span>
+                <input
+                  aria-label="Find text"
+                  className="w-full bg-transparent text-[#202124] outline-none placeholder:text-[#9aa0a6]"
+                  onChange={(event) => {
+                    setSearchQuery(event.target.value);
+                  }}
+                  placeholder="Find across populated cells"
+                  ref={searchInputRef}
+                  value={searchQuery}
+                />
+              </label>
+              <label className="flex min-w-[15rem] flex-1 items-center gap-2 border border-[#d2d7de] bg-[#f8fafc] px-2.5 py-1.5 text-[#444746] text-[0.75rem] shadow-sm">
+                <span className="font-mono text-[#5f6368] text-[0.6875rem] uppercase tracking-[0.08em]">
+                  Repl
+                </span>
+                <span className="sr-only">Replace with</span>
+                <input
+                  aria-label="Replace with"
+                  className="w-full bg-transparent text-[#202124] outline-none placeholder:text-[#9aa0a6]"
+                  onChange={(event) => {
+                    setReplaceValue(event.target.value);
+                  }}
+                  placeholder="Replace with"
+                  value={replaceValue}
+                />
+              </label>
+              <label className="flex items-center gap-2 px-1 text-[#5f6368] text-[0.75rem]">
+                <input
+                  checked={isSearchCaseSensitive}
+                  className="h-3.5 w-3.5 accent-[#1a73e8]"
+                  onChange={(event) => {
+                    setIsSearchCaseSensitive(event.target.checked);
+                  }}
+                  type="checkbox"
+                />
+                Match case
+              </label>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-[#5f6368] text-[0.75rem]">
+                <span className="font-mono">
+                  {searchMatches.length === 0
+                    ? "0 matches"
+                    : `${activeSearchMatchIndex + 1 > 0 ? activeSearchMatchIndex + 1 : 1}/${searchMatches.length}`}
+                </span>
+                <span>Searching all populated cells</span>
+              </div>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <button
+                  className="rounded border border-[#d2d7de] bg-white px-2.5 py-1 text-[#202124] text-[0.75rem] shadow-sm transition-colors hover:bg-[#f1f3f4] disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={searchMatches.length === 0}
+                  onClick={() => {
+                    jumpToSearchMatch("previous");
+                  }}
+                  type="button"
+                >
+                  Prev
+                </button>
+                <button
+                  className="rounded border border-[#d2d7de] bg-white px-2.5 py-1 text-[#202124] text-[0.75rem] shadow-sm transition-colors hover:bg-[#f1f3f4] disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={searchMatches.length === 0}
+                  onClick={() => {
+                    jumpToSearchMatch("next");
+                  }}
+                  type="button"
+                >
+                  Next
+                </button>
+                <button
+                  className="rounded border border-[#d2d7de] bg-white px-2.5 py-1 text-[#202124] text-[0.75rem] shadow-sm transition-colors hover:bg-[#f1f3f4] disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={
+                    searchMatches.length === 0 || searchQuery.trim() === ""
+                  }
+                  onClick={replaceCurrentSearchMatch}
+                  type="button"
+                >
+                  Replace
+                </button>
+                <button
+                  className="rounded border border-[#1a73e8] bg-[#1a73e8] px-2.5 py-1 text-[0.75rem] text-white shadow-sm transition-colors hover:bg-[#1557b0] disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={
+                    searchMatches.length === 0 || searchQuery.trim() === ""
+                  }
+                  onClick={replaceAllSearchMatches}
+                  type="button"
+                >
+                  Replace all
+                </button>
+                <button
+                  className="rounded border border-transparent px-2.5 py-1 text-[#5f6368] text-[0.75rem] transition-colors hover:bg-[#f1f3f4]"
+                  onClick={closeSearchPanel}
+                  type="button"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
         {showFormulaBar ? (
           <div className="grid grid-cols-[5rem_2rem_minmax(0,1fr)_auto] items-center gap-0 border-[#e0e0e0] border-t">
             <div className="flex h-full items-center border-[#e0e0e0] border-r px-3 font-mono text-[#202124] text-[0.75rem]">
@@ -2217,6 +2616,8 @@ export function VirtualizedSheet({
             const left = layout.start - viewport.scrollX;
             const isSelectedColumn = selectedColumnSet.has(column);
             const isActiveColumn = column === activeCell.col;
+            const isColumnDraggable =
+              isSelectedColumn && isFullColumnSelection && !headerDragState;
 
             return (
               <div
@@ -2224,12 +2625,16 @@ export function VirtualizedSheet({
                   showGridlines ? "border-[#e0e0e0] border-r" : ""
                 }`}
                 key={`column-${column}`}
+                onPointerDown={(event) => {
+                  handleColumnHeaderPointerDown(event, column);
+                }}
                 style={{
                   backgroundColor: getHeaderBackgroundColor(
                     isActiveColumn,
                     isSelectedColumn
                   ),
                   color: isSelectedColumn ? "#202124" : "#5f6368",
+                  cursor: isColumnDraggable ? "grab" : "default",
                   left,
                   width: layout.size,
                 }}
@@ -2264,6 +2669,8 @@ export function VirtualizedSheet({
             const top = layout.start - viewport.scrollY;
             const isSelectedRow = selectedRowSet.has(row);
             const isActiveRow = row === activeCell.row;
+            const isRowDraggable =
+              isSelectedRow && isFullRowSelection && !headerDragState;
 
             return (
               <div
@@ -2271,12 +2678,16 @@ export function VirtualizedSheet({
                   showGridlines ? "border-[#e0e0e0] border-b" : ""
                 }`}
                 key={`row-${row}`}
+                onPointerDown={(event) => {
+                  handleRowHeaderPointerDown(event, row);
+                }}
                 style={{
                   backgroundColor: getHeaderBackgroundColor(
                     isActiveRow,
                     isSelectedRow
                   ),
                   color: isSelectedRow ? "#202124" : "#5f6368",
+                  cursor: isRowDraggable ? "grab" : "default",
                   height: layout.size,
                   top,
                   width: "100%",
@@ -2658,6 +3069,7 @@ export function VirtualizedSheet({
                   ["Rename sheet", "F2"],
                   ["Undo", "Mod+Z"],
                   ["Redo", "Mod+Shift+Z"],
+                  ["Find and replace", "Mod+F"],
                   ["Cut", "Mod+X"],
                   ["Copy", "Mod+C"],
                   ["Paste", "Mod+V"],
