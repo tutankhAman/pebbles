@@ -69,32 +69,8 @@ export class MetadataStore implements DurableObject {
     // Route: GET /documents/:documentId
     const documentMatch = pathname.match(DOCUMENT_ID_PATTERN);
 
-    if (documentMatch && method === "GET") {
-      const document = this.getDocumentById(documentMatch[1]);
-
-      if (!document) {
-        return jsonResponse({ error: "Document not found" }, 404);
-      }
-
-      return jsonResponse(document);
-    }
-
-    // Route: PATCH /documents/:documentId
-    if (documentMatch && method === "PATCH") {
-      const body = (await request.json()) as {
-        title?: string;
-        touch?: boolean;
-      };
-
-      const document = body.touch
-        ? this.touchDocument(documentMatch[1])
-        : this.renameDocument(documentMatch[1], body.title ?? "");
-
-      if (!document) {
-        return jsonResponse({ error: "Document not found" }, 404);
-      }
-
-      return jsonResponse(document);
+    if (documentMatch) {
+      return this.handleDocumentRequest(documentMatch[1], method, request);
     }
 
     // Route: POST /users
@@ -102,6 +78,51 @@ export class MetadataStore implements DurableObject {
       const user = (await request.json()) as UserMeta;
       this.upsertUser(user);
       return jsonResponse({ ok: true }, 201);
+    }
+
+    return jsonResponse({ error: "Not found" }, 404);
+  }
+
+  private async handleDocumentRequest(
+    documentId: string,
+    method: string,
+    request: Request
+  ): Promise<Response> {
+    if (method === "GET") {
+      const document = this.getDocumentById(documentId);
+
+      if (!document) {
+        return jsonResponse({ error: "Document not found" }, 404);
+      }
+
+      return jsonResponse(document);
+    }
+
+    if (method === "PATCH") {
+      const body = (await request.json()) as {
+        title?: string;
+        touch?: boolean;
+      };
+
+      const document = body.touch
+        ? this.touchDocument(documentId)
+        : this.renameDocument(documentId, body.title ?? "");
+
+      if (!document) {
+        return jsonResponse({ error: "Document not found" }, 404);
+      }
+
+      return jsonResponse(document);
+    }
+
+    if (method === "DELETE") {
+      const deleted = this.deleteDocument(documentId);
+
+      if (!deleted) {
+        return jsonResponse({ error: "Document not found" }, 404);
+      }
+
+      return jsonResponse({ ok: true });
     }
 
     return jsonResponse({ error: "Not found" }, 404);
@@ -219,6 +240,20 @@ export class MetadataStore implements DurableObject {
     );
 
     return this.getDocumentById(documentId);
+  }
+
+  private deleteDocument(documentId: string): boolean {
+    const existing = this.getDocumentById(documentId);
+
+    if (!existing) {
+      return false;
+    }
+
+    this.state.storage.sql.exec(
+      "DELETE FROM documents WHERE id = ?",
+      documentId
+    );
+    return true;
   }
 
   private upsertUser(user: UserMeta): void {

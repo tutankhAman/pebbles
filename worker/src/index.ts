@@ -47,7 +47,7 @@ app.use(
       return "";
     },
     allowHeaders: ["Content-Type"],
-    allowMethods: ["GET", "POST", "PATCH", "OPTIONS"],
+    allowMethods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     maxAge: 86_400,
   })
 );
@@ -99,6 +99,17 @@ app.patch("/api/documents/:documentId", async (c) => {
       body,
       headers: { "Content-Type": "application/json" },
       method: "PATCH",
+    })
+  );
+  return new Response(response.body, response);
+});
+
+app.delete("/api/documents/:documentId", async (c) => {
+  const { documentId } = c.req.param();
+  const stub = getMetadataStub(c.env);
+  const response = await stub.fetch(
+    new Request(`http://do/documents/${documentId}`, {
+      method: "DELETE",
     })
   );
   return new Response(response.body, response);

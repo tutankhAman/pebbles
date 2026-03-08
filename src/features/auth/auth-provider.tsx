@@ -50,108 +50,153 @@ function AuthOnboardingModal() {
   const isGuestDisabled = !displayName.trim() || isSavingGuest;
 
   return (
-    <div className="pointer-events-auto fixed inset-0 z-50 flex items-center justify-center bg-[rgba(14,22,30,0.32)] p-4 backdrop-blur-sm">
-      <div className="relative w-full max-w-3xl overflow-hidden rounded-[2rem] border border-white/55 bg-[linear-gradient(135deg,_rgba(252,252,249,0.98),_rgba(240,246,248,0.95))] shadow-[0_28px_110px_rgba(15,23,42,0.26)]">
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,_rgba(42,118,130,0.18),_transparent_30%),radial-gradient(circle_at_85%_20%,_rgba(22,33,45,0.12),_transparent_26%)]" />
-        <div className="relative grid gap-8 p-6 sm:p-8 lg:grid-cols-[1.1fr_0.9fr]">
-          <section className="space-y-5">
-            <p className="font-mono text-[0.72rem] text-[var(--accent)] uppercase tracking-[0.32em]">
-              Session setup
-            </p>
-            <div className="space-y-3">
-              <h2 className="max-w-xl font-semibold text-3xl tracking-tight sm:text-4xl">
-                Choose who you are before you enter the sheet.
-              </h2>
-              <p className="max-w-xl text-[var(--muted)] leading-8">
-                Collaboration, presence colors, and cross-browser room joins all
-                depend on a stable identity. Continue with Google or set a guest
-                name for this browser session.
-              </p>
+    <div className="pointer-events-auto fixed inset-0 z-50 flex items-center justify-center bg-[rgba(19,34,26,0.22)] p-4 backdrop-blur-md sm:p-6">
+      <div className="relative w-full max-w-5xl overflow-hidden border border-[var(--border-strong)] bg-[linear-gradient(135deg,rgba(248,252,246,0.98),rgba(233,244,231,0.96))] shadow-[0_34px_120px_rgba(23,50,39,0.18)]">
+        <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(rgba(23,50,39,0.05)_1px,transparent_1px),linear-gradient(90deg,rgba(23,50,39,0.05)_1px,transparent_1px)] bg-[size:88px_88px] opacity-40" />
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(128,239,128,0.3),transparent_30%),radial-gradient(circle_at_82%_18%,rgba(190,214,181,0.48),transparent_26%)]" />
+
+        <div className="relative grid lg:grid-cols-[1.15fr_0.85fr]">
+          <section className="flex flex-col justify-between border-[var(--border)] border-b px-7 py-8 sm:px-10 sm:py-10 lg:min-h-[38rem] lg:border-r lg:border-b-0 lg:px-14 lg:py-14">
+            <div className="space-y-10">
+              <div className="flex flex-wrap items-center gap-3 text-[0.72rem] text-[var(--muted)] uppercase tracking-[0.28em]">
+                <span className="border border-[var(--border-strong)] px-3 py-2 text-[var(--foreground)]">
+                  Session setup
+                </span>
+                <span>Identity before collaboration</span>
+              </div>
+
+              <div className="space-y-6">
+                <h2 className="max-w-2xl text-4xl leading-[0.96] sm:text-5xl">
+                  Enter Pebbles with a stable identity the room can trust.
+                </h2>
+                <p className="max-w-2xl text-[0.95rem] text-[var(--muted)] leading-8 sm:text-[1rem]">
+                  Presence indicators, collaborator state, and durable document
+                  joins all depend on a real session identity. Continue with
+                  Google for account-backed access or define a guest name that
+                  stays consistent in this browser.
+                </p>
+              </div>
             </div>
-            <div className="grid gap-3 text-[var(--muted)] text-sm sm:grid-cols-2">
-              <div className="rounded-[1.35rem] border border-[var(--border)] bg-white/70 px-4 py-4">
-                <p className="font-mono text-[0.68rem] uppercase tracking-[0.24em]">
-                  Presence
-                </p>
-                <p className="mt-2 leading-6">
-                  Your name and color travel with every cursor, selection, and
-                  edit acknowledgement.
-                </p>
-              </div>
-              <div className="rounded-[1.35rem] border border-[var(--border)] bg-white/70 px-4 py-4">
-                <p className="font-mono text-[0.68rem] uppercase tracking-[0.24em]">
-                  Recovery
-                </p>
-                <p className="mt-2 leading-6">
-                  Guest identity stays cached locally so refreshes and re-joins
-                  remain coherent.
-                </p>
-              </div>
+
+            <div className="mt-12 grid gap-px border border-[var(--border)] bg-[var(--border)] text-sm sm:grid-cols-3">
+              {[
+                {
+                  detail:
+                    "Selections, cursor color, and write indicators resolve against a known collaborator.",
+                  label: "Presence",
+                  value: "Named participation",
+                },
+                {
+                  detail:
+                    "Guest sessions remain cached locally so refreshes and repeat joins stay coherent.",
+                  label: "Recovery",
+                  value: "Browser-local continuity",
+                },
+                {
+                  detail:
+                    "Choosing identity before entry keeps every room join attributable from the first edit.",
+                  label: "Rooms",
+                  value: "Reliable collaboration",
+                },
+              ].map((item) => (
+                <div
+                  className="space-y-3 bg-[rgba(249,252,247,0.94)] px-5 py-5"
+                  key={item.label}
+                >
+                  <p className="text-[0.68rem] text-[var(--muted)] uppercase tracking-[0.22em]">
+                    {item.label}
+                  </p>
+                  <p className="font-medium text-[0.94rem] text-[var(--foreground)] leading-6">
+                    {item.value}
+                  </p>
+                  <p className="text-[0.78rem] text-[var(--muted)] leading-6">
+                    {item.detail}
+                  </p>
+                </div>
+              ))}
             </div>
           </section>
 
-          <section className="rounded-[1.6rem] border border-[var(--border)] bg-white/78 p-5 shadow-[0_16px_42px_rgba(15,23,42,0.08)] backdrop-blur">
-            <div className="space-y-4">
-              <div>
-                <p className="font-mono text-[0.68rem] text-[var(--muted)] uppercase tracking-[0.24em]">
-                  Guest access
+          <section className="bg-[linear-gradient(180deg,rgba(228,239,226,0.82),rgba(248,252,246,0.96))] px-7 py-8 sm:px-10 sm:py-10 lg:px-12 lg:py-12">
+            <div className="border border-[var(--border-strong)] bg-[rgba(248,252,246,0.9)] shadow-[0_20px_60px_rgba(23,50,39,0.08)]">
+              <div className="border-[var(--border)] border-b px-6 py-5 sm:px-8">
+                <p className="text-[0.68rem] text-[var(--muted)] uppercase tracking-[0.24em]">
+                  Access
                 </p>
-                <label className="mt-3 block" htmlFor={formId}>
-                  <span className="sr-only">Guest display name</span>
-                  <input
-                    className="w-full rounded-[1.15rem] border border-[var(--border)] bg-white px-4 py-3 text-[15px] outline-none transition-colors focus:border-[var(--accent)]"
-                    id={formId}
-                    onChange={(event) => setDisplayName(event.target.value)}
-                    placeholder="Ada Lovelace"
-                    value={displayName}
-                  />
-                </label>
+                <h3 className="mt-3 text-2xl leading-tight">
+                  Pick how this browser should appear in collaborative rooms.
+                </h3>
               </div>
 
-              <button
-                className="inline-flex w-full items-center justify-center rounded-full bg-[var(--foreground)] px-5 py-3 font-medium text-[var(--background)] transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0"
-                disabled={isGuestDisabled}
-                onClick={() => {
-                  startGuestTransition(() => {
-                    setGuestIdentity(displayName);
-                  });
-                }}
-                type="button"
-              >
-                {isSavingGuest
-                  ? "Saving guest identity..."
-                  : "Continue as guest"}
-              </button>
+              <div className="space-y-6 px-6 py-6 sm:px-8 sm:py-8">
+                <div className="space-y-3">
+                  <p className="text-[0.68rem] text-[var(--muted)] uppercase tracking-[0.24em]">
+                    Guest access
+                  </p>
+                  <label className="block" htmlFor={formId}>
+                    <span className="sr-only">Guest display name</span>
+                    <input
+                      className="w-full border border-[var(--border)] bg-white px-5 py-4 text-[15px] outline-none transition-colors placeholder:text-[var(--muted)]/70 focus:border-[var(--accent)]"
+                      id={formId}
+                      onChange={(event) => setDisplayName(event.target.value)}
+                      placeholder="Ada Lovelace"
+                      value={displayName}
+                    />
+                  </label>
+                  <p className="text-[0.8rem] text-[var(--muted)] leading-6">
+                    Use a clear name so selections, edits, and presence badges
+                    remain readable to everyone in the sheet.
+                  </p>
+                </div>
 
-              <div className="flex items-center gap-3">
-                <div className="h-px flex-1 bg-[var(--border)]" />
-                <span className="font-mono text-[0.64rem] text-[var(--muted)] uppercase tracking-[0.22em]">
-                  or
-                </span>
-                <div className="h-px flex-1 bg-[var(--border)]" />
+                <button
+                  className="inline-flex min-h-14 w-full items-center justify-center border border-[var(--accent)] bg-[var(--accent)] px-5 text-sm text-white uppercase tracking-[0.22em] transition-colors hover:bg-transparent hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={isGuestDisabled}
+                  onClick={() => {
+                    startGuestTransition(() => {
+                      setGuestIdentity(displayName);
+                    });
+                  }}
+                  type="button"
+                >
+                  {isSavingGuest
+                    ? "Saving guest identity..."
+                    : "Continue as guest"}
+                </button>
+
+                <div className="flex items-center gap-3">
+                  <div className="h-px flex-1 bg-[var(--border)]" />
+                  <span className="text-[0.64rem] text-[var(--muted)] uppercase tracking-[0.22em]">
+                    or
+                  </span>
+                  <div className="h-px flex-1 bg-[var(--border)]" />
+                </div>
+
+                <button
+                  className="inline-flex min-h-14 w-full items-center justify-center border border-[var(--border-strong)] bg-[rgba(255,255,255,0.78)] px-5 text-[var(--foreground)] text-sm uppercase tracking-[0.22em] transition-colors hover:border-[var(--foreground)] hover:bg-[rgba(255,255,255,0.98)] disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={!isConfigured || isPending}
+                  onClick={signInWithGoogle}
+                  type="button"
+                >
+                  {isConfigured
+                    ? "Sign in with Google"
+                    : "Google sign-in unavailable"}
+                </button>
+
+                <div className="border border-[var(--border)] bg-[rgba(255,255,255,0.56)] px-5 py-4">
+                  <p className="text-[0.78rem] text-[var(--muted)] leading-6">
+                    Direct document joins stay blocked until identity is
+                    selected, so every room session starts with a real
+                    collaborator attached to it.
+                  </p>
+                </div>
+
+                {errorMessage ? (
+                  <p className="border border-amber-200 bg-amber-50 px-5 py-4 text-amber-900 text-sm leading-6">
+                    {errorMessage}
+                  </p>
+                ) : null}
               </div>
-
-              <button
-                className="inline-flex w-full items-center justify-center rounded-full border border-[var(--border)] bg-white px-5 py-3 font-medium transition-colors hover:bg-[var(--panel)] disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={!isConfigured || isPending}
-                onClick={signInWithGoogle}
-                type="button"
-              >
-                {isConfigured
-                  ? "Sign in with Google"
-                  : "Google sign-in unavailable"}
-              </button>
-
-              <p className="text-[var(--muted)] text-sm leading-6">
-                Direct document links stay blocked until identity is chosen, so
-                every room join has a real collaborator attached to it.
-              </p>
-
-              {errorMessage ? (
-                <p className="rounded-[1rem] border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900 text-sm">
-                  {errorMessage}
-                </p>
-              ) : null}
             </div>
           </section>
         </div>

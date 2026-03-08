@@ -104,6 +104,14 @@ export async function touchDocument(documentId: string) {
   return document;
 }
 
+export async function deleteDocument(documentId: string) {
+  await requestMetadata<{ ok: true }>(`/api/documents/${documentId}`, {
+    method: "DELETE",
+  });
+
+  notifyMetadataChanged();
+}
+
 export async function upsertUserMeta(user: UserMeta) {
   await requestMetadata<{ ok: true }>("/api/users", {
     body: JSON.stringify(user),
