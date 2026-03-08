@@ -62,6 +62,7 @@ function getMetadataStub(env: Env): DurableObjectStub {
   return env.METADATA_STORE.get(id);
 }
 
+app.options("/api/documents", (c) => c.body(null, 204));
 app.get("/api/documents", async (c) => {
   const stub = getMetadataStub(c.env);
   const response = await stub.fetch(new Request("http://do/documents"));
@@ -90,6 +91,7 @@ app.get("/api/documents/:documentId", async (c) => {
   return new Response(response.body, response);
 });
 
+app.options("/api/documents/:documentId", (c) => c.body(null, 204));
 app.patch("/api/documents/:documentId", async (c) => {
   const { documentId } = c.req.param();
   const body = await c.req.text();
@@ -115,6 +117,7 @@ app.delete("/api/documents/:documentId", async (c) => {
   return new Response(response.body, response);
 });
 
+app.options("/api/users", (c) => c.body(null, 204));
 app.post("/api/users", async (c) => {
   const body = await c.req.text();
   const stub = getMetadataStub(c.env);
