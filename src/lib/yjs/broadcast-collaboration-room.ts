@@ -165,10 +165,10 @@ export class BroadcastCollaborationRoom {
   destroy() {
     this.isDestroyed = true;
     this.listeners.clear();
-    this.channel.close();
     this.socket?.close();
     this.awareness.destroy();
     this.doc.destroy();
+    this.channel.close();
 
     if (this.reconnectTimerId !== null) {
       window.clearTimeout(this.reconnectTimerId);
@@ -229,13 +229,14 @@ export class BroadcastCollaborationRoom {
         }
 
         if (
+          !this.isDestroyed &&
           origin !== REMOTE_AWARENESS_ORIGIN &&
           origin !== YJS_SYNC_ORIGIN &&
           origin !== this
         ) {
           const update = encodeAwarenessUpdate(this.awareness, changedClients);
 
-          this.channel.postMessage({
+          this.postChannelMessage({
             senderId: this.senderId,
             type: "awareness-update",
             update,
@@ -262,7 +263,7 @@ export class BroadcastCollaborationRoom {
           this.notify();
           break;
         case "sync-request":
-          this.channel.postMessage({
+          this.postChannelMessage({
             senderId: this.senderId,
             type: "sync-response",
             update: encodeStateAsUpdate(this.doc),
@@ -282,8 +283,14 @@ export class BroadcastCollaborationRoom {
     this.doc.on("update", (update: Uint8Array, origin: unknown) => {
       persistRoomState(this.roomId, encodeStateAsUpdate(this.doc));
 
-      if (!(origin === YJS_SYNC_ORIGIN || origin === REMOTE_SYNC_ORIGIN)) {
-        this.channel.postMessage({
+      if (
+        !(
+          this.isDestroyed ||
+          origin === YJS_SYNC_ORIGIN ||
+          origin === REMOTE_SYNC_ORIGIN
+        )
+      ) {
+        this.postChannelMessage({
           senderId: this.senderId,
           type: "yjs-update",
           update,
@@ -506,6 +513,22 @@ export class BroadcastCollaborationRoom {
 
     for (const listener of this.listeners) {
       listener();
+    }
+  }
+
+  private postChannelMessage(message: BroadcastMessage) {
+    if (this.isDestroyed) {
+      return;
+    }
+
+    try {
+      this.channel.postMessage(message);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "InvalidStateError") {
+        return;
+      }
+
+      throw error;
     }
   }
 }
