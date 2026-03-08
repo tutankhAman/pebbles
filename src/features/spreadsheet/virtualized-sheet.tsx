@@ -6,9 +6,12 @@ import {
   type PointerEvent,
   startTransition,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
+import { useFormulaEngine } from "@/features/formulas/use-formula-engine";
+import { createCellKey } from "@/features/spreadsheet/addressing";
 import { getVisibleWindow } from "@/features/spreadsheet/chunks";
 import {
   createCellSelection,
@@ -38,6 +41,7 @@ import type { DocumentMeta } from "@/types/metadata";
 import type {
   CellAddress,
   CellRecord,
+  ComputedValue,
   Selection,
   SheetBounds,
   Viewport,
@@ -53,12 +57,13 @@ const DEFAULT_SELECTION: CellAddress = {
 };
 const WRITE_CONFIRMATION_DELAY_MS = 180;
 const RECONNECT_SETTLE_DELAY_MS = 220;
+type EditorSurface = "cell" | "formula-bar";
 
 function createSeededSheet(document: DocumentMeta) {
   const sheet = new SparseSheet();
 
   sheet.batchPaste({ col: 1, row: 1 }, [
-    [document.title, "Owner", document.ownerName, "Status", "Phase 4"],
+    [document.title, "Owner", document.ownerName, "Status", "Phase 5"],
     [
       "Room",
       document.roomId.slice(0, 12),
@@ -72,6 +77,11 @@ function createSeededSheet(document: DocumentMeta) {
     ["Rows", "10,000", "Columns", "100", "Logical cells", "1,000,000"],
   ]);
 
+  sheet.batchPaste({ col: 1, row: 5 }, [
+    ["12", "8", "=A5+B5", "=SUM(A5:B5)", "=SUM(A5,C5)"],
+    ["Formula input", "Formula input", "A+B", "SUM range", "SUM args"],
+  ]);
+
   sheet.setCell({ col: 1, row: 128 }, "Checkpoint row 128");
   sheet.setCell({ col: 4, row: 512 }, "Checkpoint row 512");
   sheet.setCell({ col: 6, row: 4096 }, "Sparse far field");
@@ -82,6 +92,30 @@ function createSeededSheet(document: DocumentMeta) {
 
 function getCellDisplayValue(cell: CellRecord | null) {
   return cell?.raw ?? "";
+}
+
+function formatComputedValue(value: ComputedValue | undefined) {
+  if (value == null) {
+    return "";
+  }
+
+  return String(value);
+}
+
+function getRenderedCellValue(args: {
+  cell: CellRecord | null;
+  computedValue: ComputedValue | undefined;
+  formulaError: string | undefined;
+}) {
+  if (args.cell?.kind !== "formula") {
+    return getCellDisplayValue(args.cell);
+  }
+
+  if (args.formulaError) {
+    return "#ERROR";
+  }
+
+  return formatComputedValue(args.computedValue) || args.cell.raw;
 }
 
 function buildSequence(start: number, end: number) {
@@ -253,6 +287,7 @@ export function VirtualizedSheet({
 }) {
   const sheetRef = useRef<SparseSheet | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const formulaBarRef = useRef<HTMLInputElement | null>(null);
   const keyboardProxyRef = useRef<HTMLTextAreaElement | null>(null);
   const pointerAnchorRef = useRef<CellAddress | null>(null);
   const isPointerSelectingRef = useRef(false);
@@ -265,6 +300,9 @@ export function VirtualizedSheet({
   );
   const [editorMode, setEditorMode] = useState<EditorMode>("view");
   const [editingAddress, setEditingAddress] = useState<CellAddress | null>(
+    null
+  );
+  const [editingSurface, setEditingSurface] = useState<EditorSurface | null>(
     null
   );
   const [draftValue, setDraftValue] = useState("");
@@ -294,6 +332,35 @@ export function VirtualizedSheet({
     visibleWindow.colEnd
   );
   const selectionDimensions = getSelectionDimensions(selection);
+  const activeCellRecord = sheet.getCell(activeCell);
+  const activeCellRaw = getCellDisplayValue(activeCellRecord);
+  const initialFormulaCells = useMemo(
+    () =>
+      Array.from(sheet.snapshot(), ([key, value]) => ({
+        key,
+        raw: value.raw,
+      })),
+    [sheet]
+  );
+  const visibleKeys = useMemo(
+    () =>
+      visibleRows.flatMap((row) =>
+        visibleColumns.map((column) => createCellKey({ col: column, row }))
+      ),
+    [visibleColumns, visibleRows]
+  );
+  const {
+    batchUpsert,
+    computedValues,
+    deleteCell,
+    formulaErrors,
+    isReady,
+    upsertCell,
+  } = useFormulaEngine({
+    bounds,
+    initialCells: initialFormulaCells,
+    visibleKeys,
+  });
 
   const setNextWriteState = (nextWriteState: WriteState) => {
     writeStateRef.current = nextWriteState;
@@ -360,10 +427,17 @@ export function VirtualizedSheet({
   };
 
   const writeCell = (address: CellAddress, value: string) => {
+    const key = createCellKey(address);
+
     if (value.trim() === "") {
       sheet.clearCell(address);
+      deleteCell(key);
     } else {
       sheet.setCell(address, value);
+      upsertCell({
+        key,
+        raw: value,
+      });
     }
 
     setSheetRevision((current) => current + 1);
@@ -372,6 +446,10 @@ export function VirtualizedSheet({
 
   const clearSelectionContents = () => {
     let changed = false;
+    const clearedKeys: Array<{
+      key: string;
+      raw: string;
+    }> = [];
 
     for (
       let row = selectionBounds.start.row;
@@ -383,11 +461,12 @@ export function VirtualizedSheet({
         col <= selectionBounds.end.col;
         col += 1
       ) {
-        changed =
-          sheet.clearCell({
-            col,
-            row,
-          }) || changed;
+        const address = { col, row };
+        changed = sheet.clearCell(address) || changed;
+        clearedKeys.push({
+          key: createCellKey(address),
+          raw: "",
+        });
       }
     }
 
@@ -396,20 +475,30 @@ export function VirtualizedSheet({
     }
 
     setSheetRevision((current) => current + 1);
+    batchUpsert(clearedKeys);
     scheduleWriteConfirmation();
   };
 
-  const startEditing = (address: CellAddress, initialValue?: string) => {
+  const startEditing = (
+    address: CellAddress,
+    initialValue?: string,
+    surface: EditorSurface = "cell"
+  ) => {
     const nextValue =
       initialValue ?? getCellDisplayValue(sheet.getCell(address));
     setEditingAddress(address);
+    setEditingSurface(surface);
     setDraftValue(nextValue);
     setEditorMode(nextValue.startsWith("=") ? "formula" : "edit");
-    applySelection(createCellSelection(address));
+
+    if (surface === "cell") {
+      applySelection(createCellSelection(address));
+    }
   };
 
   const stopEditing = () => {
     setEditingAddress(null);
+    setEditingSurface(null);
     setDraftValue("");
     setEditorMode("view");
     keyboardProxyRef.current?.focus();
@@ -435,6 +524,15 @@ export function VirtualizedSheet({
     inputRef.current?.focus();
     inputRef.current?.select();
   }, [editingAddress]);
+
+  useEffect(() => {
+    if (!(editingAddress && editingSurface === "formula-bar")) {
+      return;
+    }
+
+    formulaBarRef.current?.focus();
+    formulaBarRef.current?.select();
+  }, [editingAddress, editingSurface]);
 
   useEffect(() => {
     onWriteStateChange?.("idle");
@@ -648,6 +746,17 @@ export function VirtualizedSheet({
 
     sheet.batchPaste(selectionBounds.start, matrix);
     setSheetRevision((current) => current + 1);
+    batchUpsert(
+      matrix.flatMap((rowValues, rowOffset) =>
+        rowValues.map((value, colOffset) => ({
+          key: createCellKey({
+            col: selectionBounds.start.col + colOffset,
+            row: selectionBounds.start.row + rowOffset,
+          }),
+          raw: value,
+        }))
+      )
+    );
     scheduleWriteConfirmation();
 
     const rowCount = matrix.length;
@@ -685,6 +794,32 @@ export function VirtualizedSheet({
       });
     }
   };
+
+  const handleFormulaBarFocus = () => {
+    startEditing(activeCell, activeCellRaw, "formula-bar");
+  };
+
+  const handleFormulaBarKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      stopEditing();
+      return;
+    }
+
+    if (event.key === "Enter") {
+      event.preventDefault();
+      commitEditing({
+        nextSelection: createCellSelection(activeCell),
+      });
+    }
+  };
+
+  const formulaBarValue =
+    editingAddress &&
+    editingAddress.row === activeCell.row &&
+    editingAddress.col === activeCell.col
+      ? draftValue
+      : activeCellRaw;
 
   const selectionWidth =
     selectionEndLayout.left -
@@ -729,10 +864,49 @@ export function VirtualizedSheet({
           </span>
         </div>
         <div className="flex flex-wrap items-center gap-3 font-mono">
+          <span>{isReady ? "Formulas ready" : "Formulas warming"}</span>
           <span>{formatWriteState(writeState)}</span>
           <span>{bounds.rowCount.toLocaleString()} rows</span>
           <span>{bounds.colCount.toLocaleString()} cols</span>
           <span>{sheet.cellCount.toLocaleString()} populated</span>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-[5.5rem_minmax(0,1fr)] items-center gap-3 border-[var(--border)] border-b bg-[linear-gradient(180deg,_rgba(252,253,253,0.98),_rgba(246,249,250,0.94))] px-4 py-3">
+        <div className="rounded-[1rem] border border-[rgba(42,118,130,0.16)] bg-[rgba(42,118,130,0.06)] px-3 py-2 font-mono text-[0.82rem] text-[var(--accent)] uppercase tracking-[0.22em]">
+          fx {getColumnHeaderLabel(activeCell.col)}
+          {activeCell.row}
+        </div>
+        <div className="flex items-center gap-3 rounded-[1.15rem] border border-[var(--border)] bg-white/88 px-4 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]">
+          <span className="font-mono text-[0.78rem] text-[var(--muted)] uppercase tracking-[0.24em]">
+            Formula
+          </span>
+          <input
+            className="h-9 w-full bg-transparent text-[0.96rem] text-[var(--foreground)] outline-none placeholder:text-[var(--muted)]"
+            onBlur={() => {
+              if (editingSurface === "formula-bar") {
+                commitEditing({
+                  nextSelection: createCellSelection(activeCell),
+                });
+              }
+            }}
+            onChange={(event) => {
+              if (editingAddress == null || editingSurface !== "formula-bar") {
+                setEditingAddress(activeCell);
+                setEditingSurface("formula-bar");
+              }
+
+              setDraftValue(event.target.value);
+              setEditorMode(
+                event.target.value.startsWith("=") ? "formula" : "edit"
+              );
+            }}
+            onFocus={handleFormulaBarFocus}
+            onKeyDown={handleFormulaBarKeyDown}
+            placeholder="Type a value or formula like =SUM(A5:B5)"
+            ref={formulaBarRef}
+            value={formulaBarValue}
+          />
         </div>
       </div>
 
@@ -824,11 +998,19 @@ export function VirtualizedSheet({
             {visibleRows.flatMap((row) =>
               visibleColumns.map((column) => {
                 const address = { col: column, row };
+                const cellKey = createCellKey(address);
                 const layout = getCellLayout(address);
                 const cell = sheet.getCell(address);
                 const isActive =
                   activeCell.col === column && activeCell.row === row;
                 const isSelected = selectionContainsAddress(selection, address);
+                const formulaError = formulaErrors.get(cellKey);
+                const computedValue = computedValues.get(cellKey);
+                const displayValue = getRenderedCellValue({
+                  cell,
+                  computedValue,
+                  formulaError,
+                });
 
                 return (
                   <div
@@ -844,8 +1026,9 @@ export function VirtualizedSheet({
                       top: layout.top,
                       width: layout.width,
                     }}
+                    title={formulaError}
                   >
-                    <div className="truncate">{getCellDisplayValue(cell)}</div>
+                    <div className="truncate">{displayValue}</div>
                   </div>
                 );
               })
@@ -881,7 +1064,7 @@ export function VirtualizedSheet({
               }}
             />
 
-            {editingAddress ? (
+            {editingAddress && editingSurface === "cell" ? (
               <div
                 className="absolute z-20 rounded-[0.75rem] border-2 border-[var(--accent)] bg-white shadow-[0_16px_40px_rgba(15,23,42,0.12)]"
                 style={{
