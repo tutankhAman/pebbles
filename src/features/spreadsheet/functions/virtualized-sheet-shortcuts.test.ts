@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { KeyboardEvent } from "react";
+import { handleNavigationShortcuts } from "@/features/spreadsheet/functions/virtualized-sheet-shortcuts";
 import { createCellSelection } from "@/features/spreadsheet/interaction";
-import { handleNavigationShortcuts } from "@/features/spreadsheet/virtualized-sheet-shortcuts";
 import type { AxisLayout, CellAddress, SheetBounds } from "@/types/spreadsheet";
 
 const TEST_BOUNDS: SheetBounds = {

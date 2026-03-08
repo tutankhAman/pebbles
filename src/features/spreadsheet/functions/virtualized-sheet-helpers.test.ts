@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { SparseSheet } from "@/features/spreadsheet/sparse-sheet";
 import {
   findCellMatches,
   sortRowsByColumn,
-} from "@/features/spreadsheet/virtualized-sheet-helpers";
+} from "@/features/spreadsheet/functions/virtualized-sheet-search";
+import { SparseSheet } from "@/features/spreadsheet/sparse-sheet";
 
 test("sortRowsByColumn reorders a targeted row range and keeps the header row fixed", () => {
   const sheet = new SparseSheet();
