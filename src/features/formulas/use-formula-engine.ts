@@ -19,6 +19,8 @@ import type {
 } from "@/types/formula-worker";
 import type { ComputedValue, SheetBounds } from "@/types/spreadsheet";
 
+const FORMULA_BATCH_SIZE = 1000;
+
 function mergeValues(
   current: Map<string, ComputedValue>,
   entries: Array<{
@@ -144,17 +146,23 @@ export function useFormulaEngine(args: {
         return;
       }
 
-      const request: FormulaWorkerRequest = {
-        cells,
-        type: "batch-upsert",
-      };
+      for (
+        let startIndex = 0;
+        startIndex < cells.length;
+        startIndex += FORMULA_BATCH_SIZE
+      ) {
+        const request: FormulaWorkerRequest = {
+          cells: cells.slice(startIndex, startIndex + FORMULA_BATCH_SIZE),
+          type: "batch-upsert",
+        };
 
-      if (isReady) {
-        postFormulaWorkerRequest(workerRef.current, request);
-        return;
+        if (isReady) {
+          postFormulaWorkerRequest(workerRef.current, request);
+          continue;
+        }
+
+        queuedRequestsRef.current.push(request);
       }
-
-      queuedRequestsRef.current.push(request);
     },
     computedValues,
     deleteCell: (key: string) => {
