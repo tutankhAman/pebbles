@@ -66,3 +66,10 @@ export interface VisibleWindow {
   rowEnd: number;
   rowStart: number;
 }
+
+export interface SheetMetrics {
+  colWidth: number;
+  overscan: number;
+  rowHeaderWidth: number;
+  rowHeight: number;
+}
