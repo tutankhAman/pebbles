@@ -2,20 +2,28 @@ import {
   AlignCenter,
   AlignLeft,
   AlignRight,
+  ArrowDownAZ,
+  ArrowUpZA,
   Baseline,
   Bold,
+  ClipboardPaste,
+  Copy,
+  Eraser,
   Italic,
   PaintBucket,
+  Redo2,
+  Scissors,
+  Search,
   Type,
   Underline,
+  Undo2,
 } from "lucide-react";
+import {
+  CELL_FONT_FAMILY_OPTIONS,
+  CELL_FONT_FAMILY_STYLES,
+} from "@/features/spreadsheet/cell-fonts";
 import { getFontFamilyLabel } from "@/features/spreadsheet/functions/virtualized-sheet-display";
 import { getToolbarButtonClassName } from "@/features/spreadsheet/functions/virtualized-sheet-styles";
-import {
-  SearchIcon,
-  SortAscendingIcon,
-  SortDescendingIcon,
-} from "@/features/spreadsheet/ui/toolbar-icons";
 import { getColumnHeaderLabel } from "@/features/spreadsheet/viewport";
 import type {
   CellAddress,
@@ -33,9 +41,18 @@ export function SheetToolbar({
   activeFontFamily,
   activeFontSize,
   applyFormattingPatch,
+  canRedo,
+  canUndo,
+  clearSelectionContents,
+  clearSelectionFormatting,
+  copySelectionContents,
+  cutSelectionContents,
   isSearchPanelOpen,
+  pasteSelectionContents,
+  redoSelectionChange,
   setIsSearchPanelOpen,
   sortSelectionRows,
+  undoSelectionChange,
 }: {
   activeCell: CellAddress;
   activeCellAlignment: CellHorizontalAlignment;
@@ -43,13 +60,99 @@ export function SheetToolbar({
   activeFontFamily: string;
   activeFontSize: string;
   applyFormattingPatch: (patch: CellFormat) => void;
+  canRedo: boolean;
+  canUndo: boolean;
+  clearSelectionContents: () => void;
+  clearSelectionFormatting: () => void;
+  copySelectionContents: () => Promise<void>;
+  cutSelectionContents: () => Promise<void>;
   isSearchPanelOpen: boolean;
+  pasteSelectionContents: () => Promise<void>;
+  redoSelectionChange: () => void;
   setIsSearchPanelOpen: (updater: (current: boolean) => boolean) => void;
   sortSelectionRows: (direction: "asc" | "desc") => void;
+  undoSelectionChange: () => void;
 }) {
   return (
     <div className="border-[#e0e3e7] border-b bg-[#f8f9fa]">
       <div className="flex flex-wrap items-center gap-[0.375rem] px-3 py-[0.375rem]">
+        <div className="flex items-center gap-0.5 bg-white p-[0.1875rem] shadow-sm ring-1 ring-[#e0e3e7]">
+          <button
+            aria-label="Undo"
+            className={getToolbarButtonClassName(false, !canUndo)}
+            disabled={!canUndo}
+            onClick={undoSelectionChange}
+            title="Undo"
+            type="button"
+          >
+            <Undo2 className="h-4 w-4 stroke-[2.1]" />
+          </button>
+          <button
+            aria-label="Redo"
+            className={getToolbarButtonClassName(false, !canRedo)}
+            disabled={!canRedo}
+            onClick={redoSelectionChange}
+            title="Redo"
+            type="button"
+          >
+            <Redo2 className="h-4 w-4 stroke-[2.1]" />
+          </button>
+        </div>
+
+        <div className="flex items-center gap-0.5 bg-white p-[0.1875rem] shadow-sm ring-1 ring-[#e0e3e7]">
+          <button
+            aria-label="Cut"
+            className={getToolbarButtonClassName(false)}
+            onClick={() => {
+              cutSelectionContents().catch(() => undefined);
+            }}
+            title="Cut"
+            type="button"
+          >
+            <Scissors className="h-4 w-4 stroke-[2.1]" />
+          </button>
+          <button
+            aria-label="Copy"
+            className={getToolbarButtonClassName(false)}
+            onClick={() => {
+              copySelectionContents().catch(() => undefined);
+            }}
+            title="Copy"
+            type="button"
+          >
+            <Copy className="h-4 w-4 stroke-[2.1]" />
+          </button>
+          <button
+            aria-label="Paste"
+            className={getToolbarButtonClassName(false)}
+            onClick={() => {
+              pasteSelectionContents().catch(() => undefined);
+            }}
+            title="Paste"
+            type="button"
+          >
+            <ClipboardPaste className="h-4 w-4 stroke-[2.1]" />
+          </button>
+          <button
+            aria-label="Clear cells"
+            className={getToolbarButtonClassName(false)}
+            onClick={clearSelectionContents}
+            title="Clear cells"
+            type="button"
+          >
+            <Eraser className="h-4 w-4 stroke-[2.1]" />
+          </button>
+          <button
+            aria-label="Clear formatting"
+            className={getToolbarButtonClassName(false)}
+            onClick={clearSelectionFormatting}
+            title="Clear formatting"
+            type="button"
+          >
+            <Baseline className="h-4 w-4 stroke-[2.1]" />
+          </button>
+        </div>
+
         <div className="flex items-center gap-0.5 bg-white p-[0.1875rem] shadow-sm ring-1 ring-[#e0e3e7]">
           <label
             className="flex h-7 items-center gap-1.5 px-1.5 text-[#444746] transition-colors hover:bg-[#f1f3f4]"
@@ -73,13 +176,17 @@ export function SheetToolbar({
               value={activeFontFamily}
             >
               <option value="">Default</option>
-              {(["display", "mono", "sans", "serif"] as const).map(
-                (fontFamily) => (
-                  <option key={fontFamily} value={fontFamily}>
-                    {getFontFamilyLabel(fontFamily)}
-                  </option>
-                )
-              )}
+              {CELL_FONT_FAMILY_OPTIONS.map((fontFamily) => (
+                <option
+                  key={fontFamily}
+                  style={{
+                    fontFamily: CELL_FONT_FAMILY_STYLES[fontFamily],
+                  }}
+                  value={fontFamily}
+                >
+                  {getFontFamilyLabel(fontFamily)}
+                </option>
+              ))}
             </select>
           </label>
           <label
@@ -254,7 +361,7 @@ export function SheetToolbar({
             title={`Sort ascending by ${getColumnHeaderLabel(activeCell.col)}`}
             type="button"
           >
-            <SortAscendingIcon />
+            <ArrowDownAZ className="h-4 w-4 stroke-[2.1]" />
           </button>
           <button
             aria-label={`Sort rows descending by ${getColumnHeaderLabel(activeCell.col)}`}
@@ -265,7 +372,7 @@ export function SheetToolbar({
             title={`Sort descending by ${getColumnHeaderLabel(activeCell.col)}`}
             type="button"
           >
-            <SortDescendingIcon />
+            <ArrowUpZA className="h-4 w-4 stroke-[2.1]" />
           </button>
           <button
             aria-label="Find and replace"
@@ -276,7 +383,7 @@ export function SheetToolbar({
             title="Find and replace"
             type="button"
           >
-            <SearchIcon />
+            <Search className="h-4 w-4 stroke-[2.1]" />
           </button>
         </div>
       </div>

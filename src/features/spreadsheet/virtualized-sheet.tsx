@@ -1991,9 +1991,18 @@ export function VirtualizedSheet({
         activeFontFamily={activeFontFamily}
         activeFontSize={activeFontSize}
         applyFormattingPatch={applyFormattingPatch}
+        canRedo={historyRef.current.future.length > 0}
+        canUndo={historyRef.current.past.length > 0}
+        clearSelectionContents={clearSelectionContents}
+        clearSelectionFormatting={clearSelectionFormatting}
+        copySelectionContents={copySelectionContents}
+        cutSelectionContents={cutSelectionContents}
         isSearchPanelOpen={isSearchPanelOpen}
+        pasteSelectionContents={pasteSelectionContents}
+        redoSelectionChange={redoSelectionChange}
         setIsSearchPanelOpen={setIsSearchPanelOpen}
         sortSelectionRows={sortSelectionRows}
+        undoSelectionChange={undoSelectionChange}
       />
       {isSearchPanelOpen ? (
         <SearchPanel

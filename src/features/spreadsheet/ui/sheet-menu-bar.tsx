@@ -1,3 +1,7 @@
+import {
+  CELL_FONT_FAMILY_OPTIONS,
+  CELL_FONT_FAMILY_STYLES,
+} from "@/features/spreadsheet/cell-fonts";
 import { getFontFamilyLabel } from "@/features/spreadsheet/functions/virtualized-sheet-display";
 import type {
   HelpPanel,
@@ -349,13 +353,17 @@ export function SheetMenuBar({
                     value={activeFontFamily}
                   >
                     <option value="">Default</option>
-                    {(["display", "mono", "sans", "serif"] as const).map(
-                      (fontFamily) => (
-                        <option key={fontFamily} value={fontFamily}>
-                          {getFontFamilyLabel(fontFamily)}
-                        </option>
-                      )
-                    )}
+                    {CELL_FONT_FAMILY_OPTIONS.map((fontFamily) => (
+                      <option
+                        key={fontFamily}
+                        style={{
+                          fontFamily: CELL_FONT_FAMILY_STYLES[fontFamily],
+                        }}
+                        value={fontFamily}
+                      >
+                        {getFontFamilyLabel(fontFamily)}
+                      </option>
+                    ))}
                   </select>
                 </label>
                 <label className="flex items-center gap-2 text-[0.8125rem]">
