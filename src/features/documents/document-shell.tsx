@@ -127,6 +127,7 @@ export function DocumentShell({ documentId }: { documentId: string }) {
         <div className="min-h-0 flex-1">
           <VirtualizedSheet
             document={document}
+            onDocumentUpdated={setDocument}
             onWriteStateChange={setWriteState}
             session={session}
           />

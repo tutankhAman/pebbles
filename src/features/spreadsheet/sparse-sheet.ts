@@ -22,6 +22,15 @@ export const DEFAULT_SHEET_BOUNDS: SheetBounds = {
   rowCount: 10_000,
 };
 
+export interface SparseSheetSnapshot {
+  cells: Map<string, CellRecord>;
+  columnOrder: number[];
+  columnWidths: Map<number, number>;
+  formats: Map<string, CellFormatRecord>;
+  rowHeights: Map<number, number>;
+  rowOrder: number[];
+}
+
 function inferCellKind(rawValue: string): CellContent["kind"] {
   if (rawValue.startsWith("=")) {
     return "formula";
@@ -118,6 +127,76 @@ function normalizeAxisOrder(order: number[], count: number) {
   }
 
   return nextOrder;
+}
+
+function getRangeBounds(start: CellAddress, end: CellAddress) {
+  return {
+    maxCol: Math.max(start.col, end.col),
+    maxRow: Math.max(start.row, end.row),
+    minCol: Math.min(start.col, end.col),
+    minRow: Math.min(start.row, end.row),
+  };
+}
+
+function shiftNumericEntries(
+  entries: Map<number, number>,
+  startIndex: number,
+  count: number,
+  maxIndex: number
+) {
+  const nextEntries = new Map<number, number>();
+
+  for (const [index, value] of entries) {
+    if (index < startIndex) {
+      nextEntries.set(index, value);
+      continue;
+    }
+
+    const shiftedIndex = index + count;
+
+    if (shiftedIndex <= maxIndex) {
+      nextEntries.set(shiftedIndex, value);
+    }
+  }
+
+  return nextEntries;
+}
+
+function shiftSparseEntries<T>(
+  entries: Map<string, T>,
+  axis: "col" | "row",
+  startIndex: number,
+  count: number,
+  bounds: SheetBounds
+) {
+  const nextEntries = new Map<string, T>();
+
+  for (const [cellKey, value] of entries) {
+    const address = parseCellKey(cellKey);
+    const currentIndex = axis === "row" ? address.row : address.col;
+
+    if (currentIndex < startIndex) {
+      nextEntries.set(cellKey, value);
+      continue;
+    }
+
+    const shiftedIndex = currentIndex + count;
+    const maxIndex = axis === "row" ? bounds.rowCount : bounds.colCount;
+
+    if (shiftedIndex > maxIndex) {
+      continue;
+    }
+
+    nextEntries.set(
+      createCellKey({
+        col: axis === "col" ? shiftedIndex : address.col,
+        row: axis === "row" ? shiftedIndex : address.row,
+      }),
+      value
+    );
+  }
+
+  return nextEntries;
 }
 
 export class SparseSheet {
@@ -230,6 +309,26 @@ export class SparseSheet {
   clearCellFormat(address: CellAddress) {
     assertAddressWithinBounds(address, this.bounds);
     return this.formats.delete(createCellKey(address));
+  }
+
+  clearRangeFormats(start: CellAddress, end: CellAddress) {
+    assertAddressWithinBounds(start, this.bounds);
+    assertAddressWithinBounds(end, this.bounds);
+
+    const { maxCol, maxRow, minCol, minRow } = getRangeBounds(start, end);
+    const clearedKeys: string[] = [];
+
+    for (let row = minRow; row <= maxRow; row += 1) {
+      for (let col = minCol; col <= maxCol; col += 1) {
+        const cellKey = createCellKey({ col, row });
+
+        if (this.formats.delete(cellKey)) {
+          clearedKeys.push(cellKey);
+        }
+      }
+    }
+
+    return clearedKeys;
   }
 
   getCellFormat(address: CellAddress) {
@@ -360,6 +459,133 @@ export class SparseSheet {
     return [...this.rowOrder];
   }
 
+  restore(snapshot: SparseSheetSnapshot) {
+    this.cells.clear();
+    this.formats.clear();
+    this.columnWidths.clear();
+    this.rowHeights.clear();
+
+    for (const [key, value] of snapshot.cells) {
+      this.cells.set(key, value);
+    }
+
+    for (const [key, value] of snapshot.formats) {
+      this.formats.set(key, value);
+    }
+
+    for (const [column, width] of snapshot.columnWidths) {
+      this.columnWidths.set(column, width);
+    }
+
+    for (const [row, height] of snapshot.rowHeights) {
+      this.rowHeights.set(row, height);
+    }
+
+    this.columnOrder = normalizeAxisOrder(
+      snapshot.columnOrder,
+      this.bounds.colCount
+    );
+    this.rowOrder = normalizeAxisOrder(snapshot.rowOrder, this.bounds.rowCount);
+
+    return this.snapshot();
+  }
+
+  insertRows(startRow: number, count = 1) {
+    if (startRow < 1 || startRow > this.bounds.rowCount) {
+      throw new Error(`Row ${startRow} is outside sheet bounds.`);
+    }
+
+    if (count < 1) {
+      throw new Error("Inserted row count must be at least 1.");
+    }
+
+    const nextCells = shiftSparseEntries(
+      this.getCells(),
+      "row",
+      startRow,
+      count,
+      this.bounds
+    );
+    const nextFormats = shiftSparseEntries(
+      this.getFormats(),
+      "row",
+      startRow,
+      count,
+      this.bounds
+    );
+    const nextRowHeights = shiftNumericEntries(
+      this.getRowHeights(),
+      startRow,
+      count,
+      this.bounds.rowCount
+    );
+
+    this.cells.clear();
+    for (const [key, value] of nextCells) {
+      this.cells.set(key, value);
+    }
+
+    this.formats.clear();
+    for (const [key, value] of nextFormats) {
+      this.formats.set(key, value);
+    }
+
+    this.rowHeights.clear();
+    for (const [row, height] of nextRowHeights) {
+      this.rowHeights.set(row, height);
+    }
+
+    return this.snapshot();
+  }
+
+  insertColumns(startColumn: number, count = 1) {
+    if (startColumn < 1 || startColumn > this.bounds.colCount) {
+      throw new Error(`Column ${startColumn} is outside sheet bounds.`);
+    }
+
+    if (count < 1) {
+      throw new Error("Inserted column count must be at least 1.");
+    }
+
+    const nextCells = shiftSparseEntries(
+      this.getCells(),
+      "col",
+      startColumn,
+      count,
+      this.bounds
+    );
+    const nextFormats = shiftSparseEntries(
+      this.getFormats(),
+      "col",
+      startColumn,
+      count,
+      this.bounds
+    );
+    const nextColumnWidths = shiftNumericEntries(
+      this.getColumnWidths(),
+      startColumn,
+      count,
+      this.bounds.colCount
+    );
+
+    this.cells.clear();
+    for (const [key, value] of nextCells) {
+      this.cells.set(key, value);
+    }
+
+    this.formats.clear();
+    for (const [key, value] of nextFormats) {
+      this.formats.set(key, value);
+    }
+
+    this.columnWidths.clear();
+    for (const [column, width] of nextColumnWidths) {
+      this.columnWidths.set(column, width);
+    }
+
+    return this.snapshot();
+  }
+
   getChunkEntries(chunkKey: string) {
     const entries = Array.from(this.cells.entries()).filter(([cellKey]) => {
       const address = parseCellKey(cellKey);
@@ -385,7 +611,7 @@ export class SparseSheet {
     return new Map(this.rowHeights);
   }
 
-  snapshot() {
+  snapshot(): SparseSheetSnapshot {
     return {
       cells: new Map(this.cells),
       columnOrder: [...this.columnOrder],

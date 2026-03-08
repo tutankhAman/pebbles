@@ -1,10 +1,13 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import {
   type ClipboardEvent,
   type CSSProperties,
+  type Dispatch,
   type KeyboardEvent,
   type PointerEvent as ReactPointerEvent,
+  type SetStateAction,
   startTransition,
   useEffect,
   useEffectEvent,
@@ -60,7 +63,7 @@ import {
   getGridDimensions,
   getViewportFromScroll,
 } from "@/features/spreadsheet/viewport";
-import { touchDocument } from "@/lib/metadata/metadata-store";
+import { renameDocument, touchDocument } from "@/lib/metadata/metadata-store";
 import type { DocumentMeta, SessionIdentity } from "@/types/metadata";
 import type {
   CellAddress,
@@ -72,10 +75,12 @@ import type {
   CellRecord,
   ComputedValue,
   Selection,
+  SheetBounds,
   Viewport,
 } from "@/types/spreadsheet";
 import { CELL_FONT_FAMILIES, CELL_FONT_SIZES } from "@/types/spreadsheet";
 import type { EditorMode, WriteState } from "@/types/ui";
+import type { SparseSheetSnapshot } from "./sparse-sheet";
 
 const DEFAULT_VIEWPORT_WIDTH = 960;
 const DEFAULT_VIEWPORT_HEIGHT = 640;
@@ -93,6 +98,8 @@ const CELL_FONT_FAMILY_STYLES: Record<CellFontFamily, string> = {
 };
 
 type EditorSurface = "cell" | "formula-bar";
+type HelpPanel = "about" | "formulas" | "shortcuts";
+type MenuKey = "edit" | "file" | "format" | "help" | "insert" | "view";
 type ReorderAxis = "col" | "row";
 type HeaderDragState =
   | {
@@ -106,6 +113,26 @@ type HeaderDragState =
       logicalIndex: number;
       type: "resize";
     };
+interface HistoryState {
+  selection: Selection;
+  snapshot: SparseSheetSnapshot;
+}
+interface KeyedChange<T> {
+  key: string;
+  value: T | null;
+}
+interface NumericChange {
+  index: number;
+  value: number | null;
+}
+interface SnapshotChanges {
+  cells: KeyedChange<CellRecord>[];
+  columnOrderChanged: boolean;
+  columnWidths: NumericChange[];
+  formats: KeyedChange<CellFormatRecord>[];
+  rowHeights: NumericChange[];
+  rowOrderChanged: boolean;
+}
 
 function createSeededSheet(document: DocumentMeta) {
   const sheet = new SparseSheet();
@@ -224,6 +251,17 @@ function getAlignmentLabel(alignment: CellHorizontalAlignment) {
   }
 }
 
+function getHelpPanelTitle(activeHelpPanel: HelpPanel) {
+  switch (activeHelpPanel) {
+    case "formulas":
+      return "Formula examples";
+    case "shortcuts":
+      return "Keyboard shortcuts";
+    default:
+      return "About this sheet";
+  }
+}
+
 function getCellContentStyle(args: {
   cell: CellRecord | null;
   computedValue: ComputedValue | undefined;
@@ -258,6 +296,433 @@ function getCellContentStyle(args: {
     }),
     textDecorationLine: args.format?.underline ? "underline" : "none",
   };
+}
+
+function areArraysEqual(left: number[], right: number[]) {
+  return (
+    left.length === right.length &&
+    left.every((value, index) => right[index] === value)
+  );
+}
+
+function areRecordsEqual(left: unknown, right: unknown) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function collectKeyedChanges<T>(args: {
+  next: Map<string, T>;
+  previous: Map<string, T>;
+}) {
+  const changes: KeyedChange<T>[] = [];
+
+  for (const [key, value] of args.next) {
+    if (!areRecordsEqual(args.previous.get(key), value)) {
+      changes.push({
+        key,
+        value,
+      });
+    }
+  }
+
+  for (const key of args.previous.keys()) {
+    if (!args.next.has(key)) {
+      changes.push({
+        key,
+        value: null,
+      });
+    }
+  }
+
+  return changes;
+}
+
+function collectNumericChanges(args: {
+  next: Map<number, number>;
+  previous: Map<number, number>;
+}) {
+  const changes: NumericChange[] = [];
+
+  for (const [index, value] of args.next) {
+    if (args.previous.get(index) !== value) {
+      changes.push({
+        index,
+        value,
+      });
+    }
+  }
+
+  for (const index of args.previous.keys()) {
+    if (!args.next.has(index)) {
+      changes.push({
+        index,
+        value: null,
+      });
+    }
+  }
+
+  return changes;
+}
+
+function getSnapshotChanges(
+  previous: SparseSheetSnapshot,
+  next: SparseSheetSnapshot
+): SnapshotChanges {
+  return {
+    cells: collectKeyedChanges({
+      next: next.cells,
+      previous: previous.cells,
+    }),
+    columnOrderChanged: !areArraysEqual(previous.columnOrder, next.columnOrder),
+    columnWidths: collectNumericChanges({
+      next: next.columnWidths,
+      previous: previous.columnWidths,
+    }),
+    formats: collectKeyedChanges({
+      next: next.formats,
+      previous: previous.formats,
+    }),
+    rowHeights: collectNumericChanges({
+      next: next.rowHeights,
+      previous: previous.rowHeights,
+    }),
+    rowOrderChanged: !areArraysEqual(previous.rowOrder, next.rowOrder),
+  };
+}
+
+function hasSnapshotChanges(
+  changes: SnapshotChanges,
+  previous: SparseSheetSnapshot,
+  next: SparseSheetSnapshot
+) {
+  return (
+    changes.cells.length > 0 ||
+    changes.columnOrderChanged ||
+    changes.columnWidths.length > 0 ||
+    changes.formats.length > 0 ||
+    changes.rowHeights.length > 0 ||
+    changes.rowOrderChanged ||
+    !areArraysEqual(previous.columnOrder, next.columnOrder) ||
+    !areArraysEqual(previous.rowOrder, next.rowOrder)
+  );
+}
+
+function createShortcutLabel(label: string) {
+  return (
+    <span className="font-mono text-[0.7rem] text-[var(--muted)] uppercase tracking-[0.18em]">
+      {label}
+    </span>
+  );
+}
+
+function MenuButton({
+  isOpen,
+  label,
+  onClick,
+}: {
+  isOpen: boolean;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className={`rounded-full border px-3 py-1.5 text-[0.76rem] uppercase tracking-[0.18em] transition-colors ${
+        isOpen
+          ? "border-[var(--accent)] bg-[rgba(42,118,130,0.12)] text-[var(--accent)]"
+          : "border-[var(--border)] bg-white/80 text-[var(--muted)] hover:border-[var(--accent)] hover:text-[var(--foreground)]"
+      }`}
+      onClick={onClick}
+      type="button"
+    >
+      {label}
+    </button>
+  );
+}
+
+function MenuItem({
+  checked,
+  disabled,
+  label,
+  onClick,
+  shortcut,
+}: {
+  checked?: boolean;
+  disabled?: boolean;
+  label: string;
+  onClick?: () => void;
+  shortcut?: string;
+}) {
+  return (
+    <button
+      className="flex w-full items-center justify-between gap-4 rounded-[0.95rem] px-3 py-2 text-left text-[var(--foreground)] text-sm transition-colors hover:bg-[rgba(42,118,130,0.08)] disabled:cursor-not-allowed disabled:opacity-50"
+      disabled={disabled}
+      onClick={onClick}
+      type="button"
+    >
+      <span className="flex items-center gap-2">
+        <span className="w-4 text-center text-[var(--accent)]">
+          {checked ? "x" : ""}
+        </span>
+        <span>{label}</span>
+      </span>
+      {shortcut ? createShortcutLabel(shortcut) : null}
+    </button>
+  );
+}
+
+interface ShortcutHandlerArgs {
+  activeCellFormat: CellFormatRecord | null;
+  applyFormattingPatch: (patch: CellFormat) => void;
+  clearSelectionFormatting: () => void;
+  cutSelectionContents: () => Promise<void>;
+  event: KeyboardEvent<HTMLDivElement | HTMLTextAreaElement>;
+  insertColumn: (placement: "left" | "right") => void;
+  insertRow: (placement: "above" | "below") => void;
+  openRenameDialog: () => void;
+  redoSelectionChange: () => void;
+  setActiveHelpPanel: Dispatch<SetStateAction<HelpPanel | null>>;
+  setFreezeFirstColumn: Dispatch<SetStateAction<boolean>>;
+  setFreezeTopRow: Dispatch<SetStateAction<boolean>>;
+  setShowCrosshairHighlight: Dispatch<SetStateAction<boolean>>;
+  setShowFormulaBar: Dispatch<SetStateAction<boolean>>;
+  setShowGridlines: Dispatch<SetStateAction<boolean>>;
+  undoSelectionChange: () => void;
+}
+
+function handleMetaShortcuts(args: ShortcutHandlerArgs) {
+  const isModifierPressed = args.event.metaKey || args.event.ctrlKey;
+  const lowerKey = args.event.key.toLowerCase();
+
+  if (args.event.key === "F2") {
+    args.event.preventDefault();
+    args.openRenameDialog();
+    return true;
+  }
+
+  if (args.event.shiftKey && args.event.key === "?") {
+    args.event.preventDefault();
+    args.setActiveHelpPanel("shortcuts");
+    return true;
+  }
+
+  if (isModifierPressed && lowerKey === "z") {
+    args.event.preventDefault();
+
+    if (args.event.shiftKey) {
+      args.redoSelectionChange();
+      return true;
+    }
+
+    args.undoSelectionChange();
+    return true;
+  }
+
+  if (isModifierPressed && lowerKey === "x") {
+    args.event.preventDefault();
+    args.cutSelectionContents().catch(() => undefined);
+    return true;
+  }
+
+  if (isModifierPressed && lowerKey === "b") {
+    args.event.preventDefault();
+    args.applyFormattingPatch({
+      bold: !args.activeCellFormat?.bold,
+    });
+    return true;
+  }
+
+  if (isModifierPressed && lowerKey === "i") {
+    args.event.preventDefault();
+    args.applyFormattingPatch({
+      italic: !args.activeCellFormat?.italic,
+    });
+    return true;
+  }
+
+  if (isModifierPressed && lowerKey === "u") {
+    args.event.preventDefault();
+    args.applyFormattingPatch({
+      underline: !args.activeCellFormat?.underline,
+    });
+    return true;
+  }
+
+  if (isModifierPressed && args.event.key === "/") {
+    args.event.preventDefault();
+    args.setShowFormulaBar((current) => !current);
+    return true;
+  }
+
+  return false;
+}
+
+function handleViewShortcuts(args: ShortcutHandlerArgs) {
+  const lowerKey = args.event.key.toLowerCase();
+
+  if (args.event.altKey && args.event.shiftKey && lowerKey === "t") {
+    args.event.preventDefault();
+    args.setFreezeTopRow((current) => !current);
+    return true;
+  }
+
+  if (args.event.altKey && args.event.shiftKey && args.event.key === "1") {
+    args.event.preventDefault();
+    args.setFreezeFirstColumn((current) => !current);
+    return true;
+  }
+
+  if (args.event.altKey && lowerKey === "g") {
+    args.event.preventDefault();
+    args.setShowGridlines((current) => !current);
+    return true;
+  }
+
+  if (args.event.altKey && lowerKey === "h") {
+    args.event.preventDefault();
+    args.setShowCrosshairHighlight((current) => !current);
+    return true;
+  }
+
+  return false;
+}
+
+function handleFormatAndInsertShortcuts(args: ShortcutHandlerArgs) {
+  const lowerKey = args.event.key.toLowerCase();
+
+  if (args.event.altKey && args.event.shiftKey && lowerKey === "l") {
+    args.event.preventDefault();
+    args.applyFormattingPatch({
+      align: args.activeCellFormat?.align === "left" ? undefined : "left",
+    });
+    return true;
+  }
+
+  if (args.event.altKey && args.event.shiftKey && lowerKey === "e") {
+    args.event.preventDefault();
+    args.applyFormattingPatch({
+      align: args.activeCellFormat?.align === "center" ? undefined : "center",
+    });
+    return true;
+  }
+
+  if (args.event.altKey && args.event.shiftKey && lowerKey === "r") {
+    args.event.preventDefault();
+    args.applyFormattingPatch({
+      align: args.activeCellFormat?.align === "right" ? undefined : "right",
+    });
+    return true;
+  }
+
+  if (args.event.altKey && args.event.shiftKey && lowerKey === "x") {
+    args.event.preventDefault();
+    args.clearSelectionFormatting();
+    return true;
+  }
+
+  return false;
+}
+
+function handleInsertShortcuts(args: ShortcutHandlerArgs) {
+  if (
+    args.event.altKey &&
+    args.event.shiftKey &&
+    args.event.key === "ArrowUp"
+  ) {
+    args.event.preventDefault();
+    args.insertRow("above");
+    return true;
+  }
+
+  if (
+    args.event.altKey &&
+    args.event.shiftKey &&
+    args.event.key === "ArrowDown"
+  ) {
+    args.event.preventDefault();
+    args.insertRow("below");
+    return true;
+  }
+
+  if (
+    args.event.altKey &&
+    args.event.shiftKey &&
+    args.event.key === "ArrowLeft"
+  ) {
+    args.event.preventDefault();
+    args.insertColumn("left");
+    return true;
+  }
+
+  if (
+    args.event.altKey &&
+    args.event.shiftKey &&
+    args.event.key === "ArrowRight"
+  ) {
+    args.event.preventDefault();
+    args.insertColumn("right");
+    return true;
+  }
+
+  return false;
+}
+
+interface NavigationHandlerArgs {
+  activeCell: CellAddress;
+  applySelection: (selection: Selection) => void;
+  bounds: SheetBounds;
+  clearSelectionContents: () => void;
+  columnLayout: import("@/types/spreadsheet").AxisLayout;
+  event: KeyboardEvent<HTMLDivElement | HTMLTextAreaElement>;
+  rowLayout: import("@/types/spreadsheet").AxisLayout;
+  selection: Selection;
+  startEditing: (address: CellAddress, initialValue?: string) => void;
+}
+
+function handleNavigationShortcuts(args: NavigationHandlerArgs) {
+  if (
+    args.event.key === "ArrowDown" ||
+    args.event.key === "ArrowLeft" ||
+    args.event.key === "ArrowRight" ||
+    args.event.key === "ArrowUp" ||
+    args.event.key === "Enter" ||
+    args.event.key === "Tab"
+  ) {
+    args.event.preventDefault();
+    const delta = getNavigationDelta(args.event.key, args.event.shiftKey);
+    const nextAddress = moveCellAddressInLayout(
+      args.activeCell,
+      delta,
+      args.bounds,
+      args.columnLayout,
+      args.rowLayout
+    );
+
+    args.applySelection(
+      args.event.shiftKey
+        ? extendSelection(args.selection, nextAddress)
+        : createCellSelection(nextAddress)
+    );
+    return true;
+  }
+
+  if (args.event.key === "Backspace" || args.event.key === "Delete") {
+    args.event.preventDefault();
+    args.clearSelectionContents();
+    return true;
+  }
+
+  if (args.event.key === "Escape") {
+    args.event.preventDefault();
+    args.applySelection(createCellSelection(args.activeCell));
+    return true;
+  }
+
+  if (isPrintableCellInput(args.event)) {
+    args.event.preventDefault();
+    args.startEditing(args.activeCell, args.event.key);
+    return true;
+  }
+
+  return false;
 }
 
 function formatWriteState(writeState: WriteState) {
@@ -550,9 +1015,13 @@ function VirtualCell({
   address,
   columnLayout,
   computedValue,
+  displayLeft,
+  displayTop,
   format,
   formulaError,
   isActive,
+  isFrozen,
+  isGridlinesVisible,
   isSelected,
   record,
   rowLayout,
@@ -560,9 +1029,13 @@ function VirtualCell({
   address: CellAddress;
   columnLayout: import("@/types/spreadsheet").AxisLayout;
   computedValue: ComputedValue | undefined;
+  displayLeft?: number;
+  displayTop?: number;
   format: CellFormatRecord | null;
   formulaError: string | undefined;
   isActive: boolean;
+  isFrozen?: boolean;
+  isGridlinesVisible?: boolean;
   isSelected: boolean;
   record: CellRecord | null;
   rowLayout: import("@/types/spreadsheet").AxisLayout;
@@ -576,12 +1049,17 @@ function VirtualCell({
 
   return (
     <div
-      className="absolute overflow-hidden border-[var(--border)] border-r border-b px-3 py-2 text-[0.92rem] leading-6"
+      className={`absolute overflow-hidden px-3 py-2 text-[0.92rem] leading-6 ${
+        isGridlinesVisible === false
+          ? ""
+          : "border-[var(--border)] border-r border-b"
+      }`}
       style={{
         height: layout.height,
-        left: layout.left,
-        top: layout.top,
+        left: displayLeft ?? layout.left,
+        top: displayTop ?? layout.top,
         width: layout.width,
+        zIndex: isFrozen ? 12 : undefined,
         ...getCellContentStyle({
           cell: record,
           computedValue,
@@ -598,24 +1076,36 @@ function VirtualCell({
   );
 }
 
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the editor composes menu actions, virtualization, and collaboration in one client boundary.
 export function VirtualizedSheet({
   document,
+  onDocumentUpdated,
   onWriteStateChange,
   session,
 }: {
   document: DocumentMeta;
+  onDocumentUpdated?: Dispatch<SetStateAction<DocumentMeta | null>>;
   onWriteStateChange?: (writeState: WriteState) => void;
   session: SessionIdentity | null;
 }) {
+  const router = useRouter();
   const sheetRef = useRef<SparseSheet | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const formulaBarRef = useRef<HTMLInputElement | null>(null);
   const keyboardProxyRef = useRef<HTMLTextAreaElement | null>(null);
   const pointerAnchorRef = useRef<CellAddress | null>(null);
+  const clipboardTextRef = useRef("");
   const isPointerSelectingRef = useRef(false);
   const commitTimerRef = useRef<number | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
   const writeStateRef = useRef<WriteState>("idle");
+  const historyRef = useRef<{
+    future: HistoryState[];
+    past: HistoryState[];
+  }>({
+    future: [],
+    past: [],
+  });
   const [, setCellRevision] = useState(0);
   const [selection, setSelection] = useState<Selection>(() =>
     createCellSelection(DEFAULT_SELECTION)
@@ -631,6 +1121,17 @@ export function VirtualizedSheet({
   const [writeState, setWriteState] = useState<WriteState>("idle");
   const [headerDragState, setHeaderDragState] =
     useState<HeaderDragState | null>(null);
+  const [activeMenu, setActiveMenu] = useState<MenuKey | null>(null);
+  const [activeHelpPanel, setActiveHelpPanel] = useState<HelpPanel | null>(
+    null
+  );
+  const [showFormulaBar, setShowFormulaBar] = useState(true);
+  const [showGridlines, setShowGridlines] = useState(true);
+  const [showCrosshairHighlight, setShowCrosshairHighlight] = useState(true);
+  const [freezeTopRow, setFreezeTopRow] = useState(false);
+  const [freezeFirstColumn, setFreezeFirstColumn] = useState(false);
+  const [isRenameDialogOpen, setIsRenameDialogOpen] = useState(false);
+  const [renameDraft, setRenameDraft] = useState(document.title);
 
   if (sheetRef.current === null) {
     sheetRef.current = new SparseSheet();
@@ -817,6 +1318,167 @@ export function VirtualizedSheet({
     selection,
     session,
   });
+  const closeMenus = () => {
+    setActiveMenu(null);
+  };
+  const pushHistoryState = (entry: HistoryState) => {
+    const nextPast = [...historyRef.current.past, entry].slice(-40);
+
+    historyRef.current = {
+      future: [],
+      past: nextPast,
+    };
+  };
+  const runTrackedMutation = (mutation: () => void) => {
+    const beforeState: HistoryState = {
+      selection,
+      snapshot: sheet.snapshot(),
+    };
+
+    mutation();
+
+    const afterSnapshot = sheetRef.current?.snapshot();
+
+    if (!afterSnapshot) {
+      return;
+    }
+
+    const changes = getSnapshotChanges(beforeState.snapshot, afterSnapshot);
+
+    if (hasSnapshotChanges(changes, beforeState.snapshot, afterSnapshot)) {
+      pushHistoryState(beforeState);
+    }
+  };
+  const commitTrackedSheetMutation = (args: {
+    mutation: () => void;
+    nextSelection?: Selection;
+  }) => {
+    const beforeState: HistoryState = {
+      selection,
+      snapshot: sheet.snapshot(),
+    };
+
+    args.mutation();
+
+    const afterSnapshot = sheet.snapshot();
+    const changes = getSnapshotChanges(beforeState.snapshot, afterSnapshot);
+
+    if (!hasSnapshotChanges(changes, beforeState.snapshot, afterSnapshot)) {
+      if (args.nextSelection) {
+        applySelection(args.nextSelection);
+      }
+
+      return;
+    }
+
+    pushHistoryState(beforeState);
+    syncSnapshotChanges(changes, afterSnapshot);
+    setCellRevisionWithTransition();
+    setLayoutRevisionWithTransition();
+
+    if (args.nextSelection) {
+      applySelection(args.nextSelection);
+    }
+  };
+  const syncCellSnapshotChanges = (cellChanges: KeyedChange<CellRecord>[]) => {
+    const nextCellWrites = cellChanges.map((change) => ({
+      key: change.key,
+      raw: change.value?.raw ?? "",
+    }));
+
+    if (nextCellWrites.length === 0) {
+      return false;
+    }
+
+    syncBatchUpsert(nextCellWrites);
+
+    const formulaWrites = nextCellWrites.filter(
+      (entry) => entry.raw.trim() !== ""
+    );
+
+    if (formulaWrites.length > 0) {
+      batchUpsert(formulaWrites);
+    }
+
+    for (const entry of nextCellWrites) {
+      if (entry.raw.trim() === "") {
+        deleteCell(entry.key);
+      }
+    }
+
+    return true;
+  };
+  const syncFormatSnapshotChanges = (
+    formatChanges: KeyedChange<CellFormatRecord>[]
+  ) => {
+    if (formatChanges.length === 0) {
+      return false;
+    }
+
+    batchFormat(
+      formatChanges.map((change) => ({
+        format: change.value,
+        key: change.key,
+      }))
+    );
+
+    return true;
+  };
+  const syncMetricSnapshotChanges = (
+    changes: SnapshotChanges,
+    next: SparseSheetSnapshot
+  ) => {
+    for (const change of changes.columnWidths) {
+      setColumnWidth(change.index, change.value);
+    }
+
+    for (const change of changes.rowHeights) {
+      setRowHeight(change.index, change.value);
+    }
+
+    if (changes.columnOrderChanged) {
+      setColumnOrder(next.columnOrder);
+    }
+
+    if (changes.rowOrderChanged) {
+      setRowOrder(next.rowOrder);
+    }
+
+    return (
+      changes.columnWidths.length > 0 ||
+      changes.rowHeights.length > 0 ||
+      changes.columnOrderChanged ||
+      changes.rowOrderChanged
+    );
+  };
+  const syncSnapshotChanges = (
+    changes: SnapshotChanges,
+    next: SparseSheetSnapshot
+  ) => {
+    const didSyncCells = syncCellSnapshotChanges(changes.cells);
+    const didSyncFormats = syncFormatSnapshotChanges(changes.formats);
+    const didSyncMetrics = syncMetricSnapshotChanges(changes, next);
+
+    if (didSyncCells || didSyncFormats || didSyncMetrics) {
+      scheduleWriteConfirmation();
+      syncDocumentTimestamp();
+    }
+  };
+  const restoreHistoryState = (historyState: HistoryState) => {
+    const beforeSnapshot = sheet.snapshot();
+    const changes = getSnapshotChanges(beforeSnapshot, historyState.snapshot);
+
+    if (!hasSnapshotChanges(changes, beforeSnapshot, historyState.snapshot)) {
+      applySelection(historyState.selection);
+      return;
+    }
+
+    sheet.restore(historyState.snapshot);
+    syncSnapshotChanges(changes, historyState.snapshot);
+    setCellRevisionWithTransition();
+    setLayoutRevisionWithTransition();
+    applySelection(historyState.selection);
+  };
 
   const applyOptimisticCellWrite = (address: CellAddress, raw: string) => {
     const key = createCellKey(address);
@@ -881,26 +1543,28 @@ export function VirtualizedSheet({
   };
 
   const applyFormattingPatch = (patch: CellFormat) => {
-    const formatChanges = selectionMembers.rows.flatMap((row) =>
-      selectionMembers.columns.map((col) => {
-        const key = createCellKey({ col, row });
-        const nextFormat = sheet.patchCellFormat({ col, row }, patch);
+    runTrackedMutation(() => {
+      const formatChanges = selectionMembers.rows.flatMap((row) =>
+        selectionMembers.columns.map((col) => {
+          const key = createCellKey({ col, row });
+          const nextFormat = sheet.patchCellFormat({ col, row }, patch);
 
-        return {
-          format: nextFormat,
-          key,
-        };
-      })
-    );
+          return {
+            format: nextFormat,
+            key,
+          };
+        })
+      );
 
-    if (formatChanges.length === 0) {
-      return;
-    }
+      if (formatChanges.length === 0) {
+        return;
+      }
 
-    setCellRevisionWithTransition();
-    batchFormat(formatChanges);
-    scheduleWriteConfirmation();
-    syncDocumentTimestamp();
+      setCellRevisionWithTransition();
+      batchFormat(formatChanges);
+      scheduleWriteConfirmation();
+      syncDocumentTimestamp();
+    });
   };
 
   const applyColumnWidth = (column: number, width: number, sync = false) => {
@@ -1014,33 +1678,37 @@ export function VirtualizedSheet({
   };
 
   const writeCell = (address: CellAddress, value: string) => {
-    const key = createCellKey(address);
+    runTrackedMutation(() => {
+      const key = createCellKey(address);
 
-    applyOptimisticCellWrite(address, value);
-    syncUpsertCell({
-      key,
-      raw: value,
+      applyOptimisticCellWrite(address, value);
+      syncUpsertCell({
+        key,
+        raw: value,
+      });
+      scheduleWriteConfirmation();
+      syncDocumentTimestamp();
     });
-    scheduleWriteConfirmation();
-    syncDocumentTimestamp();
   };
 
   const clearSelectionContents = () => {
-    const clearedKeys = selectionMembers.rows.flatMap((row) =>
-      selectionMembers.columns.map((col) => ({
-        key: createCellKey({ col, row }),
-        raw: "",
-      }))
-    );
+    runTrackedMutation(() => {
+      const clearedKeys = selectionMembers.rows.flatMap((row) =>
+        selectionMembers.columns.map((col) => ({
+          key: createCellKey({ col, row }),
+          raw: "",
+        }))
+      );
 
-    if (clearedKeys.length === 0) {
-      return;
-    }
+      if (clearedKeys.length === 0) {
+        return;
+      }
 
-    applyOptimisticBatchWrite(clearedKeys);
-    syncBatchUpsert(clearedKeys);
-    scheduleWriteConfirmation();
-    syncDocumentTimestamp();
+      applyOptimisticBatchWrite(clearedKeys);
+      syncBatchUpsert(clearedKeys);
+      scheduleWriteConfirmation();
+      syncDocumentTimestamp();
+    });
   };
 
   const startEditing = (
@@ -1145,6 +1813,45 @@ export function VirtualizedSheet({
   useEffect(() => {
     onWriteStateChange?.("idle");
   }, [onWriteStateChange]);
+
+  useEffect(() => {
+    setRenameDraft(document.title);
+  }, [document.title]);
+
+  useEffect(() => {
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+
+      if (!(target instanceof Element)) {
+        return;
+      }
+
+      if (
+        target.closest("[data-menu-root]") ||
+        target.closest("[data-dialog-root]")
+      ) {
+        return;
+      }
+
+      setActiveMenu(null);
+    };
+
+    const handleEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setActiveMenu(null);
+        setActiveHelpPanel(null);
+        setIsRenameDialogOpen(false);
+      }
+    };
+
+    window.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("keydown", handleEscape);
+
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("keydown", handleEscape);
+    };
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -1407,47 +2114,55 @@ export function VirtualizedSheet({
       return;
     }
 
+    const shortcutArgs: ShortcutHandlerArgs = {
+      activeCellFormat,
+      applyFormattingPatch,
+      clearSelectionFormatting,
+      cutSelectionContents,
+      event,
+      insertColumn,
+      insertRow,
+      openRenameDialog,
+      redoSelectionChange,
+      setActiveHelpPanel,
+      setFreezeFirstColumn,
+      setFreezeTopRow,
+      setShowCrosshairHighlight,
+      setShowFormulaBar,
+      setShowGridlines,
+      undoSelectionChange,
+    };
+
+    if (handleMetaShortcuts(shortcutArgs)) {
+      return;
+    }
+
+    if (handleViewShortcuts(shortcutArgs)) {
+      return;
+    }
+
+    if (handleFormatAndInsertShortcuts(shortcutArgs)) {
+      return;
+    }
+
+    if (handleInsertShortcuts(shortcutArgs)) {
+      return;
+    }
+
     if (
-      event.key === "ArrowDown" ||
-      event.key === "ArrowLeft" ||
-      event.key === "ArrowRight" ||
-      event.key === "ArrowUp" ||
-      event.key === "Enter" ||
-      event.key === "Tab"
-    ) {
-      event.preventDefault();
-      const delta = getNavigationDelta(event.key, event.shiftKey);
-      const nextAddress = moveCellAddressInLayout(
+      handleNavigationShortcuts({
         activeCell,
-        delta,
+        applySelection,
         bounds,
+        clearSelectionContents,
         columnLayout,
-        rowLayout
-      );
-
-      applySelection(
-        event.shiftKey
-          ? extendSelection(selection, nextAddress)
-          : createCellSelection(nextAddress)
-      );
+        event,
+        rowLayout,
+        selection,
+        startEditing,
+      })
+    ) {
       return;
-    }
-
-    if (event.key === "Backspace" || event.key === "Delete") {
-      event.preventDefault();
-      clearSelectionContents();
-      return;
-    }
-
-    if (event.key === "Escape") {
-      event.preventDefault();
-      applySelection(createCellSelection(activeCell));
-      return;
-    }
-
-    if (isPrintableCellInput(event)) {
-      event.preventDefault();
-      startEditing(activeCell, event.key);
     }
   };
 
@@ -1455,75 +2170,248 @@ export function VirtualizedSheet({
     event: ClipboardEvent<HTMLDivElement | HTMLTextAreaElement>
   ) => {
     event.preventDefault();
+    const text = getSelectionClipboardText();
+    clipboardTextRef.current = text;
+    event.clipboardData.setData("text/plain", text);
+  };
+
+  const handleCut = (
+    event: ClipboardEvent<HTMLDivElement | HTMLTextAreaElement>
+  ) => {
+    handleCopy(event);
+    clearSelectionContents();
+  };
+
+  const getSelectionClipboardText = () => {
     const matrix = getSelectionMatrix(
       sheet,
       selectionMembers.columns,
       selectionMembers.rows
     );
-    event.clipboardData.setData("text/plain", serializeSelectionMatrix(matrix));
+
+    return serializeSelectionMatrix(matrix);
+  };
+
+  const writeClipboardText = async (value: string) => {
+    clipboardTextRef.current = value;
+
+    if (!navigator.clipboard?.writeText) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(value);
+    } catch {
+      // Ignore clipboard permission failures and keep the in-memory fallback.
+    }
+  };
+
+  const readClipboardText = async () => {
+    if (navigator.clipboard?.readText) {
+      try {
+        const value = await navigator.clipboard.readText();
+
+        if (value) {
+          clipboardTextRef.current = value;
+          return value;
+        }
+      } catch {
+        // Ignore clipboard permission failures and fall back to in-memory data.
+      }
+    }
+
+    return clipboardTextRef.current;
+  };
+
+  const applyPastedMatrix = (matrix: string[][]) => {
+    if (matrix.length === 0) {
+      return;
+    }
+
+    runTrackedMutation(() => {
+      const startColumn = selectionMembers.columns[0] ?? activeCell.col;
+      const startRow = selectionMembers.rows[0] ?? activeCell.row;
+      const pastedCells = matrix.flatMap((rowValues, rowOffset) =>
+        rowValues.map((value, colOffset) => ({
+          key: createCellKey({
+            col: columnLayout.order[
+              Math.min(
+                columnLayout.count,
+                columnLayout.logicalToVisual[startColumn] + colOffset
+              ) - 1
+            ],
+            row: rowLayout.order[
+              Math.min(
+                rowLayout.count,
+                rowLayout.logicalToVisual[startRow] + rowOffset
+              ) - 1
+            ],
+          }),
+          raw: value,
+        }))
+      );
+
+      applyOptimisticBatchWrite(pastedCells);
+      syncBatchUpsert(pastedCells);
+      scheduleWriteConfirmation();
+      syncDocumentTimestamp();
+
+      const endColumnVisual = Math.min(
+        columnLayout.count,
+        columnLayout.logicalToVisual[startColumn] +
+          Math.max(...matrix.map((row) => row.length), 1) -
+          1
+      );
+      const endRowVisual = Math.min(
+        rowLayout.count,
+        rowLayout.logicalToVisual[startRow] + matrix.length - 1
+      );
+
+      applySelection(
+        createRangeSelection(
+          {
+            col: startColumn,
+            row: startRow,
+          },
+          {
+            col: columnLayout.order[endColumnVisual - 1],
+            row: rowLayout.order[endRowVisual - 1],
+          }
+        )
+      );
+    });
+  };
+
+  const copySelectionContents = async () => {
+    await writeClipboardText(getSelectionClipboardText());
+  };
+
+  const cutSelectionContents = async () => {
+    await copySelectionContents();
+    clearSelectionContents();
+  };
+
+  const pasteSelectionContents = async () => {
+    const text = await readClipboardText();
+    const matrix = parseClipboardMatrix(text);
+
+    applyPastedMatrix(matrix);
+  };
+
+  const clearSelectionFormatting = () => {
+    commitTrackedSheetMutation({
+      mutation: () => {
+        for (const row of selectionMembers.rows) {
+          for (const col of selectionMembers.columns) {
+            sheet.clearCellFormat({ col, row });
+          }
+        }
+      },
+    });
+  };
+
+  const insertRow = (placement: "above" | "below") => {
+    const targetRow =
+      placement === "above"
+        ? activeCell.row
+        : Math.min(bounds.rowCount, activeCell.row + 1);
+
+    commitTrackedSheetMutation({
+      mutation: () => {
+        sheet.insertRows(targetRow);
+      },
+      nextSelection: createCellSelection({
+        col: activeCell.col,
+        row: targetRow,
+      }),
+    });
+  };
+
+  const insertColumn = (placement: "left" | "right") => {
+    const targetColumn =
+      placement === "left"
+        ? activeCell.col
+        : Math.min(bounds.colCount, activeCell.col + 1);
+
+    commitTrackedSheetMutation({
+      mutation: () => {
+        sheet.insertColumns(targetColumn);
+      },
+      nextSelection: createCellSelection({
+        col: targetColumn,
+        row: activeCell.row,
+      }),
+    });
+  };
+
+  const undoSelectionChange = () => {
+    const previousState = historyRef.current.past.at(-1);
+
+    if (!previousState) {
+      return;
+    }
+
+    historyRef.current = {
+      future: [
+        ...historyRef.current.future,
+        {
+          selection,
+          snapshot: sheet.snapshot(),
+        },
+      ].slice(-40),
+      past: historyRef.current.past.slice(0, -1),
+    };
+
+    stopEditing();
+    restoreHistoryState(previousState);
+  };
+
+  const redoSelectionChange = () => {
+    const nextState = historyRef.current.future.at(-1);
+
+    if (!nextState) {
+      return;
+    }
+
+    historyRef.current = {
+      future: historyRef.current.future.slice(0, -1),
+      past: [
+        ...historyRef.current.past,
+        {
+          selection,
+          snapshot: sheet.snapshot(),
+        },
+      ].slice(-40),
+    };
+
+    stopEditing();
+    restoreHistoryState(nextState);
+  };
+
+  const openRenameDialog = () => {
+    setRenameDraft(document.title);
+    setIsRenameDialogOpen(true);
+    closeMenus();
+  };
+
+  const submitRename = async () => {
+    const nextTitle = renameDraft.trim();
+
+    if (!nextTitle) {
+      return;
+    }
+
+    const renamedDocument = await renameDocument(document.id, nextTitle);
+    onDocumentUpdated?.(renamedDocument);
+    setIsRenameDialogOpen(false);
   };
 
   const handlePaste = (
     event: ClipboardEvent<HTMLDivElement | HTMLTextAreaElement>
   ) => {
     event.preventDefault();
-    const matrix = parseClipboardMatrix(
-      event.clipboardData.getData("text/plain")
-    );
-
-    if (matrix.length === 0) {
-      return;
-    }
-
-    const startColumn = selectionMembers.columns[0] ?? activeCell.col;
-    const startRow = selectionMembers.rows[0] ?? activeCell.row;
-    const pastedCells = matrix.flatMap((rowValues, rowOffset) =>
-      rowValues.map((value, colOffset) => ({
-        key: createCellKey({
-          col: columnLayout.order[
-            Math.min(
-              columnLayout.count,
-              columnLayout.logicalToVisual[startColumn] + colOffset
-            ) - 1
-          ],
-          row: rowLayout.order[
-            Math.min(
-              rowLayout.count,
-              rowLayout.logicalToVisual[startRow] + rowOffset
-            ) - 1
-          ],
-        }),
-        raw: value,
-      }))
-    );
-
-    applyOptimisticBatchWrite(pastedCells);
-    syncBatchUpsert(pastedCells);
-    scheduleWriteConfirmation();
-    syncDocumentTimestamp();
-
-    const endColumnVisual = Math.min(
-      columnLayout.count,
-      columnLayout.logicalToVisual[startColumn] +
-        Math.max(...matrix.map((row) => row.length), 1) -
-        1
-    );
-    const endRowVisual = Math.min(
-      rowLayout.count,
-      rowLayout.logicalToVisual[startRow] + matrix.length - 1
-    );
-    applySelection(
-      createRangeSelection(
-        {
-          col: startColumn,
-          row: startRow,
-        },
-        {
-          col: columnLayout.order[endColumnVisual - 1],
-          row: rowLayout.order[endRowVisual - 1],
-        }
-      )
-    );
+    clipboardTextRef.current = event.clipboardData.getData("text/plain");
+    applyPastedMatrix(parseClipboardMatrix(clipboardTextRef.current));
   };
 
   const handleInputKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
@@ -1579,7 +2467,7 @@ export function VirtualizedSheet({
       : activeCellRaw;
 
   return (
-    <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-[1.75rem] border border-[var(--border)] bg-white/82 shadow-[0_18px_48px_rgba(15,23,42,0.08)]">
+    <section className="relative flex h-full min-h-0 flex-col overflow-hidden rounded-[1.75rem] border border-[var(--border)] bg-white/82 shadow-[0_18px_48px_rgba(15,23,42,0.08)]">
       <textarea
         aria-label="Spreadsheet keyboard input"
         autoFocus
@@ -1588,6 +2476,7 @@ export function VirtualizedSheet({
           // Intentionally no-op; the proxy exists only to receive keyboard events.
         }}
         onCopy={handleCopy}
+        onCut={handleCut}
         onKeyDown={handleKeyDown}
         onPaste={handlePaste}
         readOnly
@@ -1595,6 +2484,410 @@ export function VirtualizedSheet({
         spellCheck={false}
         value=""
       />
+
+      <div
+        className="relative border-[var(--border)] border-b bg-[rgba(248,250,251,0.94)] px-4 py-3"
+        data-menu-root
+      >
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            {(
+              ["file", "edit", "view", "insert", "format", "help"] as const
+            ).map((menuKey) => (
+              <MenuButton
+                isOpen={activeMenu === menuKey}
+                key={menuKey}
+                label={menuKey}
+                onClick={() => {
+                  setActiveMenu((current) =>
+                    current === menuKey ? null : menuKey
+                  );
+                }}
+              />
+            ))}
+          </div>
+          <div className="flex flex-wrap items-center gap-3 text-[0.72rem] text-[var(--muted)] uppercase tracking-[0.18em]">
+            <span className="font-mono">F2 rename</span>
+            <span className="font-mono">? shortcuts</span>
+          </div>
+        </div>
+
+        {activeMenu ? (
+          <div className="absolute inset-x-4 top-full z-40 mt-2 rounded-[1.25rem] border border-[var(--border)] bg-white/96 p-3 shadow-[0_22px_60px_rgba(15,23,42,0.14)] backdrop-blur">
+            {activeMenu === "file" ? (
+              <div className="grid gap-1">
+                <MenuItem
+                  label="Export CSV"
+                  onClick={() => {
+                    handleExport("csv");
+                    closeMenus();
+                  }}
+                />
+                <MenuItem
+                  label="Export TSV"
+                  onClick={() => {
+                    handleExport("tsv");
+                    closeMenus();
+                  }}
+                />
+                <MenuItem
+                  label="Export JSON"
+                  onClick={() => {
+                    handleExport("json");
+                    closeMenus();
+                  }}
+                />
+                <MenuItem
+                  label="Rename sheet/document"
+                  onClick={openRenameDialog}
+                  shortcut="F2"
+                />
+                <MenuItem
+                  label="Back to dashboard"
+                  onClick={() => {
+                    router.push("/dashboard");
+                  }}
+                />
+              </div>
+            ) : null}
+
+            {activeMenu === "edit" ? (
+              <div className="grid gap-1">
+                <MenuItem
+                  disabled={historyRef.current.past.length === 0}
+                  label="Undo"
+                  onClick={() => {
+                    undoSelectionChange();
+                    closeMenus();
+                  }}
+                  shortcut="Mod+Z"
+                />
+                <MenuItem
+                  disabled={historyRef.current.future.length === 0}
+                  label="Redo"
+                  onClick={() => {
+                    redoSelectionChange();
+                    closeMenus();
+                  }}
+                  shortcut="Mod+Shift+Z"
+                />
+                <MenuItem
+                  label="Cut"
+                  onClick={() => {
+                    cutSelectionContents().catch(() => undefined);
+                    closeMenus();
+                  }}
+                  shortcut="Mod+X"
+                />
+                <MenuItem
+                  label="Copy"
+                  onClick={() => {
+                    copySelectionContents().catch(() => undefined);
+                    closeMenus();
+                  }}
+                  shortcut="Mod+C"
+                />
+                <MenuItem
+                  label="Paste"
+                  onClick={() => {
+                    pasteSelectionContents().catch(() => undefined);
+                    closeMenus();
+                  }}
+                  shortcut="Mod+V"
+                />
+                <MenuItem
+                  label="Clear cells"
+                  onClick={() => {
+                    clearSelectionContents();
+                    closeMenus();
+                  }}
+                  shortcut="Delete"
+                />
+                <MenuItem
+                  label="Clear formatting"
+                  onClick={() => {
+                    clearSelectionFormatting();
+                    closeMenus();
+                  }}
+                  shortcut="Alt+Shift+X"
+                />
+              </div>
+            ) : null}
+
+            {activeMenu === "view" ? (
+              <div className="grid gap-1">
+                <MenuItem
+                  checked={showFormulaBar}
+                  label="Show formula bar"
+                  onClick={() => {
+                    setShowFormulaBar((current) => !current);
+                    closeMenus();
+                  }}
+                  shortcut="Mod+/"
+                />
+                <MenuItem
+                  checked={showGridlines}
+                  label="Show gridlines"
+                  onClick={() => {
+                    setShowGridlines((current) => !current);
+                    closeMenus();
+                  }}
+                  shortcut="Alt+G"
+                />
+                <MenuItem
+                  checked={showCrosshairHighlight}
+                  label="Full row/column highlight"
+                  onClick={() => {
+                    setShowCrosshairHighlight((current) => !current);
+                    closeMenus();
+                  }}
+                  shortcut="Alt+H"
+                />
+                <MenuItem
+                  checked={freezeTopRow}
+                  label="Freeze top row"
+                  onClick={() => {
+                    setFreezeTopRow((current) => !current);
+                    closeMenus();
+                  }}
+                  shortcut="Alt+Shift+T"
+                />
+                <MenuItem
+                  checked={freezeFirstColumn}
+                  label="Freeze first column"
+                  onClick={() => {
+                    setFreezeFirstColumn((current) => !current);
+                    closeMenus();
+                  }}
+                  shortcut="Alt+Shift+1"
+                />
+              </div>
+            ) : null}
+
+            {activeMenu === "insert" ? (
+              <div className="grid gap-1">
+                <MenuItem
+                  label="Row above"
+                  onClick={() => {
+                    insertRow("above");
+                    closeMenus();
+                  }}
+                  shortcut="Alt+Shift+Up"
+                />
+                <MenuItem
+                  label="Row below"
+                  onClick={() => {
+                    insertRow("below");
+                    closeMenus();
+                  }}
+                  shortcut="Alt+Shift+Down"
+                />
+                <MenuItem
+                  label="Column left"
+                  onClick={() => {
+                    insertColumn("left");
+                    closeMenus();
+                  }}
+                  shortcut="Alt+Shift+Left"
+                />
+                <MenuItem
+                  label="Column right"
+                  onClick={() => {
+                    insertColumn("right");
+                    closeMenus();
+                  }}
+                  shortcut="Alt+Shift+Right"
+                />
+              </div>
+            ) : null}
+
+            {activeMenu === "format" ? (
+              <div className="grid gap-3">
+                <div className="flex flex-wrap items-center gap-3 rounded-[1rem] border border-[var(--border)] bg-[rgba(248,250,251,0.92)] px-3 py-3">
+                  <label className="flex items-center gap-2 text-sm">
+                    <span>Font</span>
+                    <select
+                      className="rounded-full border border-[var(--border)] bg-white px-3 py-1.5 text-sm outline-none"
+                      onChange={(event) => {
+                        const nextFontFamily = event.target.value;
+
+                        applyFormattingPatch({
+                          fontFamily:
+                            nextFontFamily === ""
+                              ? undefined
+                              : (nextFontFamily as CellFontFamily),
+                        });
+                      }}
+                      value={activeFontFamily}
+                    >
+                      <option value="">Default</option>
+                      {CELL_FONT_FAMILIES.map((fontFamily) => (
+                        <option key={fontFamily} value={fontFamily}>
+                          {getFontFamilyLabel(fontFamily)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <span>Size</span>
+                    <select
+                      className="rounded-full border border-[var(--border)] bg-white px-3 py-1.5 text-sm outline-none"
+                      onChange={(event) => {
+                        const nextFontSize = event.target.value;
+
+                        applyFormattingPatch({
+                          fontSize:
+                            nextFontSize === ""
+                              ? undefined
+                              : (Number(nextFontSize) as CellFontSize),
+                        });
+                      }}
+                      value={activeFontSize}
+                    >
+                      <option value="">Auto</option>
+                      {CELL_FONT_SIZES.map((fontSize) => (
+                        <option key={fontSize} value={fontSize}>
+                          {fontSize}px
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <span>Text</span>
+                    <input
+                      className="h-8 w-10 rounded-md border border-[var(--border)]"
+                      onChange={(event) => {
+                        applyFormattingPatch({
+                          textColor: event.target.value,
+                        });
+                      }}
+                      type="color"
+                      value={activeCellFormat?.textColor ?? "#172333"}
+                    />
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <span>Fill</span>
+                    <input
+                      className="h-8 w-10 rounded-md border border-[var(--border)]"
+                      onChange={(event) => {
+                        applyFormattingPatch({
+                          backgroundColor: event.target.value,
+                        });
+                      }}
+                      type="color"
+                      value={activeCellFormat?.backgroundColor ?? "#ffffff"}
+                    />
+                  </label>
+                </div>
+                <div className="grid gap-1">
+                  <MenuItem
+                    checked={Boolean(activeCellFormat?.bold)}
+                    label="Bold"
+                    onClick={() => {
+                      applyFormattingPatch({
+                        bold: !activeCellFormat?.bold,
+                      });
+                      closeMenus();
+                    }}
+                    shortcut="Mod+B"
+                  />
+                  <MenuItem
+                    checked={Boolean(activeCellFormat?.italic)}
+                    label="Italic"
+                    onClick={() => {
+                      applyFormattingPatch({
+                        italic: !activeCellFormat?.italic,
+                      });
+                      closeMenus();
+                    }}
+                    shortcut="Mod+I"
+                  />
+                  <MenuItem
+                    checked={Boolean(activeCellFormat?.underline)}
+                    label="Underline"
+                    onClick={() => {
+                      applyFormattingPatch({
+                        underline: !activeCellFormat?.underline,
+                      });
+                      closeMenus();
+                    }}
+                    shortcut="Mod+U"
+                  />
+                  <MenuItem
+                    checked={activeCellAlignment === "left"}
+                    label="Align left"
+                    onClick={() => {
+                      applyFormattingPatch({
+                        align:
+                          activeCellFormat?.align === "left"
+                            ? undefined
+                            : "left",
+                      });
+                      closeMenus();
+                    }}
+                    shortcut="Alt+Shift+L"
+                  />
+                  <MenuItem
+                    checked={activeCellAlignment === "center"}
+                    label="Align center"
+                    onClick={() => {
+                      applyFormattingPatch({
+                        align:
+                          activeCellFormat?.align === "center"
+                            ? undefined
+                            : "center",
+                      });
+                      closeMenus();
+                    }}
+                    shortcut="Alt+Shift+E"
+                  />
+                  <MenuItem
+                    checked={activeCellAlignment === "right"}
+                    label="Align right"
+                    onClick={() => {
+                      applyFormattingPatch({
+                        align:
+                          activeCellFormat?.align === "right"
+                            ? undefined
+                            : "right",
+                      });
+                      closeMenus();
+                    }}
+                    shortcut="Alt+Shift+R"
+                  />
+                </div>
+              </div>
+            ) : null}
+
+            {activeMenu === "help" ? (
+              <div className="grid gap-1">
+                <MenuItem
+                  label="Keyboard shortcuts"
+                  onClick={() => {
+                    setActiveHelpPanel("shortcuts");
+                    closeMenus();
+                  }}
+                  shortcut="Shift+?"
+                />
+                <MenuItem
+                  label="Formula examples"
+                  onClick={() => {
+                    setActiveHelpPanel("formulas");
+                    closeMenus();
+                  }}
+                />
+                <MenuItem
+                  label="About this sheet"
+                  onClick={() => {
+                    setActiveHelpPanel("about");
+                    closeMenus();
+                  }}
+                />
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
 
       <div className="flex items-center justify-between border-[var(--border)] border-b bg-[rgba(247,249,250,0.92)] px-4 py-3 text-[0.72rem] text-[var(--muted)] uppercase tracking-[0.18em]">
         <div className="flex flex-wrap items-center gap-3">
@@ -1803,63 +3096,73 @@ export function VirtualizedSheet({
               Export JSON
             </button>
           </div>
-          <div className="flex items-center gap-3 rounded-[1.15rem] border border-[var(--border)] bg-white/88 px-4 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]">
-            <span className="font-mono text-[0.78rem] text-[var(--muted)] uppercase tracking-[0.24em]">
-              Formula
-            </span>
-            <input
-              className="h-9 w-full bg-transparent text-[0.96rem] text-[var(--foreground)] outline-none placeholder:text-[var(--muted)]"
-              onBlur={() => {
-                if (editingSurface === "formula-bar") {
-                  commitEditing({
-                    nextSelection: createCellSelection(activeCell),
-                  });
-                }
-              }}
-              onChange={(event) => {
-                if (
-                  editingAddress == null ||
-                  editingSurface !== "formula-bar"
-                ) {
-                  setEditingAddress(activeCell);
-                  setEditingSurface("formula-bar");
-                }
+          {showFormulaBar ? (
+            <div className="flex items-center gap-3 rounded-[1.15rem] border border-[var(--border)] bg-white/88 px-4 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]">
+              <span className="font-mono text-[0.78rem] text-[var(--muted)] uppercase tracking-[0.24em]">
+                Formula
+              </span>
+              <input
+                className="h-9 w-full bg-transparent text-[0.96rem] text-[var(--foreground)] outline-none placeholder:text-[var(--muted)]"
+                onBlur={() => {
+                  if (editingSurface === "formula-bar") {
+                    commitEditing({
+                      nextSelection: createCellSelection(activeCell),
+                    });
+                  }
+                }}
+                onChange={(event) => {
+                  if (
+                    editingAddress == null ||
+                    editingSurface !== "formula-bar"
+                  ) {
+                    setEditingAddress(activeCell);
+                    setEditingSurface("formula-bar");
+                  }
 
-                setDraftValue(event.target.value);
-                setEditorMode(
-                  event.target.value.startsWith("=") ? "formula" : "edit"
-                );
-              }}
-              onFocus={handleFormulaBarFocus}
-              onKeyDown={handleFormulaBarKeyDown}
-              placeholder="Type a value or formula like =SUM(A5:B5)"
-              ref={formulaBarRef}
-              value={formulaBarValue}
-            />
-            <div className="flex flex-wrap items-center gap-2">
-              {peers.map((peer) => (
-                <span
-                  className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-[rgba(248,250,251,0.92)] px-3 py-1 text-[0.78rem] text-[var(--foreground)]"
-                  key={peer.userId}
-                >
+                  setDraftValue(event.target.value);
+                  setEditorMode(
+                    event.target.value.startsWith("=") ? "formula" : "edit"
+                  );
+                }}
+                onFocus={handleFormulaBarFocus}
+                onKeyDown={handleFormulaBarKeyDown}
+                placeholder="Type a value or formula like =SUM(A5:B5)"
+                ref={formulaBarRef}
+                value={formulaBarValue}
+              />
+              <div className="flex flex-wrap items-center gap-2">
+                {peers.map((peer) => (
                   <span
-                    className="h-2.5 w-2.5 rounded-full"
-                    style={{ backgroundColor: peer.color }}
-                  />
-                  {peer.displayName}
-                </span>
-              ))}
+                    className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-[rgba(248,250,251,0.92)] px-3 py-1 text-[0.78rem] text-[var(--foreground)]"
+                    key={peer.userId}
+                  >
+                    <span
+                      className="h-2.5 w-2.5 rounded-full"
+                      style={{ backgroundColor: peer.color }}
+                    />
+                    {peer.displayName}
+                  </span>
+                ))}
+              </div>
             </div>
-          </div>
+          ) : null}
         </div>
       </div>
 
       <div className="grid min-h-0 flex-1 grid-cols-[4.5rem_minmax(0,1fr)] grid-rows-[3rem_minmax(0,1fr)] bg-[linear-gradient(180deg,_rgba(251,252,252,0.95),_rgba(244,247,248,0.92))]">
-        <div className="border-[var(--border)] border-r border-b bg-[rgba(236,241,244,0.92)] px-3 py-3 font-mono text-[0.68rem] text-[var(--muted)] uppercase tracking-[0.28em]">
+        <div
+          className={`bg-[rgba(236,241,244,0.92)] px-3 py-3 font-mono text-[0.68rem] text-[var(--muted)] uppercase tracking-[0.28em] ${
+            showGridlines ? "border-[var(--border)] border-r border-b" : ""
+          }`}
+        >
           Grid
         </div>
 
-        <div className="relative overflow-hidden border-[var(--border)] border-b bg-[rgba(236,241,244,0.92)]">
+        <div
+          className={`relative overflow-hidden bg-[rgba(236,241,244,0.92)] ${
+            showGridlines ? "border-[var(--border)] border-b" : ""
+          }`}
+        >
           {visibleColumns.map((column) => {
             const layout = getAxisLayoutByLogicalIndex(columnLayout, column);
             const left = layout.start - viewport.scrollX;
@@ -1868,7 +3171,9 @@ export function VirtualizedSheet({
 
             return (
               <div
-                className="absolute top-0 h-full border-[var(--border)] border-r"
+                className={`absolute top-0 h-full ${
+                  showGridlines ? "border-[var(--border)] border-r" : ""
+                }`}
                 key={`column-${column}`}
                 style={{
                   backgroundColor: getHeaderBackgroundColor(
@@ -1919,7 +3224,11 @@ export function VirtualizedSheet({
           })}
         </div>
 
-        <div className="relative overflow-hidden border-[var(--border)] border-r bg-[rgba(248,249,250,0.92)]">
+        <div
+          className={`relative overflow-hidden bg-[rgba(248,249,250,0.92)] ${
+            showGridlines ? "border-[var(--border)] border-r" : ""
+          }`}
+        >
           {visibleRows.map((row) => {
             const layout = getAxisLayoutByLogicalIndex(rowLayout, row);
             const top = layout.start - viewport.scrollY;
@@ -1928,7 +3237,9 @@ export function VirtualizedSheet({
 
             return (
               <div
-                className="absolute left-0 border-[var(--border)] border-b"
+                className={`absolute left-0 ${
+                  showGridlines ? "border-[var(--border)] border-b" : ""
+                }`}
                 key={`row-${row}`}
                 style={{
                   backgroundColor: getHeaderBackgroundColor(
@@ -1997,6 +3308,27 @@ export function VirtualizedSheet({
               width: gridWidth,
             }}
           >
+            {showCrosshairHighlight ? (
+              <>
+                <div
+                  className="pointer-events-none absolute left-0 rounded-[0.7rem] bg-[rgba(42,118,130,0.05)]"
+                  style={{
+                    height: activeCellLayout.height,
+                    top: activeCellLayout.top,
+                    width: "100%",
+                  }}
+                />
+                <div
+                  className="pointer-events-none absolute top-0 rounded-[0.7rem] bg-[rgba(42,118,130,0.05)]"
+                  style={{
+                    height: "100%",
+                    left: activeCellLayout.left,
+                    width: activeCellLayout.width,
+                  }}
+                />
+              </>
+            ) : null}
+
             {visibleRows.flatMap((row) =>
               visibleColumns.map((column) => (
                 <VirtualCell
@@ -2010,6 +3342,7 @@ export function VirtualizedSheet({
                     createCellKey({ col: column, row })
                   )}
                   isActive={activeCell.col === column && activeCell.row === row}
+                  isGridlinesVisible={showGridlines}
                   isSelected={selectionContainsAddress(
                     selection,
                     { col: column, row },
@@ -2022,6 +3355,92 @@ export function VirtualizedSheet({
                 />
               ))
             )}
+
+            {freezeTopRow
+              ? visibleColumns.map((column) => (
+                  <VirtualCell
+                    address={{ col: column, row: 1 }}
+                    columnLayout={columnLayout}
+                    computedValue={computedValues.get(
+                      createCellKey({ col: column, row: 1 })
+                    )}
+                    displayTop={viewport.scrollY}
+                    format={sheet.getCellFormat({ col: column, row: 1 })}
+                    formulaError={formulaErrors.get(
+                      createCellKey({ col: column, row: 1 })
+                    )}
+                    isActive={activeCell.col === column && activeCell.row === 1}
+                    isFrozen
+                    isGridlinesVisible={showGridlines}
+                    isSelected={selectionContainsAddress(
+                      selection,
+                      { col: column, row: 1 },
+                      columnLayout,
+                      rowLayout
+                    )}
+                    key={`frozen-top-${column}`}
+                    record={sheet.getCell({ col: column, row: 1 })}
+                    rowLayout={rowLayout}
+                  />
+                ))
+              : null}
+
+            {freezeFirstColumn
+              ? visibleRows.map((row) => (
+                  <VirtualCell
+                    address={{ col: 1, row }}
+                    columnLayout={columnLayout}
+                    computedValue={computedValues.get(
+                      createCellKey({ col: 1, row })
+                    )}
+                    displayLeft={viewport.scrollX}
+                    format={sheet.getCellFormat({ col: 1, row })}
+                    formulaError={formulaErrors.get(
+                      createCellKey({ col: 1, row })
+                    )}
+                    isActive={activeCell.col === 1 && activeCell.row === row}
+                    isFrozen
+                    isGridlinesVisible={showGridlines}
+                    isSelected={selectionContainsAddress(
+                      selection,
+                      { col: 1, row },
+                      columnLayout,
+                      rowLayout
+                    )}
+                    key={`frozen-left-${row}`}
+                    record={sheet.getCell({ col: 1, row })}
+                    rowLayout={rowLayout}
+                  />
+                ))
+              : null}
+
+            {freezeTopRow && freezeFirstColumn ? (
+              <VirtualCell
+                address={{ col: 1, row: 1 }}
+                columnLayout={columnLayout}
+                computedValue={computedValues.get(
+                  createCellKey({ col: 1, row: 1 })
+                )}
+                displayLeft={viewport.scrollX}
+                displayTop={viewport.scrollY}
+                format={sheet.getCellFormat({ col: 1, row: 1 })}
+                formulaError={formulaErrors.get(
+                  createCellKey({ col: 1, row: 1 })
+                )}
+                isActive={activeCell.col === 1 && activeCell.row === 1}
+                isFrozen
+                isGridlinesVisible={showGridlines}
+                isSelected={selectionContainsAddress(
+                  selection,
+                  { col: 1, row: 1 },
+                  columnLayout,
+                  rowLayout
+                )}
+                key="frozen-corner"
+                record={sheet.getCell({ col: 1, row: 1 })}
+                rowLayout={rowLayout}
+              />
+            ) : null}
 
             <div
               className="pointer-events-none absolute rounded-[0.85rem] bg-[rgba(42,118,130,0.07)]"
@@ -2173,6 +3592,135 @@ export function VirtualizedSheet({
           </div>
         </div>
       </div>
+
+      {isRenameDialogOpen ? (
+        <div
+          className="absolute inset-0 z-50 flex items-center justify-center bg-[rgba(15,23,42,0.18)] px-4"
+          data-dialog-root
+        >
+          <div className="w-full max-w-md rounded-[1.4rem] border border-[var(--border)] bg-white p-5 shadow-[0_24px_60px_rgba(15,23,42,0.16)]">
+            <p className="font-mono text-[0.72rem] text-[var(--accent)] uppercase tracking-[0.22em]">
+              Rename sheet
+            </p>
+            <input
+              className="mt-4 w-full rounded-[1rem] border border-[var(--border)] bg-[rgba(248,250,251,0.92)] px-4 py-3 text-sm outline-none"
+              onChange={(event) => {
+                setRenameDraft(event.target.value);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  submitRename().catch(() => undefined);
+                }
+              }}
+              value={renameDraft}
+            />
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button
+                className="rounded-full border border-[var(--border)] px-4 py-2 text-sm"
+                onClick={() => {
+                  setIsRenameDialogOpen(false);
+                }}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className="rounded-full border border-[var(--accent)] bg-[var(--accent)] px-4 py-2 text-sm text-white"
+                onClick={() => {
+                  submitRename().catch(() => undefined);
+                }}
+                type="button"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {activeHelpPanel ? (
+        <div
+          className="absolute inset-0 z-50 flex items-center justify-center bg-[rgba(15,23,42,0.18)] px-4"
+          data-dialog-root
+        >
+          <div className="w-full max-w-2xl rounded-[1.4rem] border border-[var(--border)] bg-white p-5 shadow-[0_24px_60px_rgba(15,23,42,0.16)]">
+            <div className="flex items-center justify-between gap-4">
+              <p className="font-mono text-[0.72rem] text-[var(--accent)] uppercase tracking-[0.22em]">
+                {getHelpPanelTitle(activeHelpPanel)}
+              </p>
+              <button
+                className="rounded-full border border-[var(--border)] px-4 py-2 text-sm"
+                onClick={() => {
+                  setActiveHelpPanel(null);
+                }}
+                type="button"
+              >
+                Close
+              </button>
+            </div>
+
+            {activeHelpPanel === "shortcuts" ? (
+              <div className="mt-4 grid gap-2 text-sm">
+                {[
+                  ["Rename sheet", "F2"],
+                  ["Undo", "Mod+Z"],
+                  ["Redo", "Mod+Shift+Z"],
+                  ["Cut", "Mod+X"],
+                  ["Copy", "Mod+C"],
+                  ["Paste", "Mod+V"],
+                  ["Bold", "Mod+B"],
+                  ["Italic", "Mod+I"],
+                  ["Underline", "Mod+U"],
+                  ["Toggle formula bar", "Mod+/"],
+                  ["Toggle gridlines", "Alt+G"],
+                  ["Toggle row/column highlight", "Alt+H"],
+                ].map(([label, shortcut]) => (
+                  <div
+                    className="flex items-center justify-between rounded-[1rem] border border-[var(--border)] bg-[rgba(248,250,251,0.9)] px-4 py-3"
+                    key={label}
+                  >
+                    <span>{label}</span>
+                    {createShortcutLabel(shortcut)}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+
+            {activeHelpPanel === "formulas" ? (
+              <div className="mt-4 grid gap-3 text-sm">
+                {["=A1+B1", "=SUM(A1:B5)", "=SUM(A1,C1,D1)", "=A5/B5"].map(
+                  (example) => (
+                    <div
+                      className="rounded-[1rem] border border-[var(--border)] bg-[rgba(248,250,251,0.9)] px-4 py-3 font-mono"
+                      key={example}
+                    >
+                      {example}
+                    </div>
+                  )
+                )}
+              </div>
+            ) : null}
+
+            {activeHelpPanel === "about" ? (
+              <div className="mt-4 grid gap-2 text-sm">
+                <div className="rounded-[1rem] border border-[var(--border)] bg-[rgba(248,250,251,0.9)] px-4 py-3">
+                  <p>{document.title}</p>
+                  <p className="mt-2 text-[var(--muted)]">
+                    {bounds.rowCount.toLocaleString()} rows ·{" "}
+                    {bounds.colCount.toLocaleString()} columns ·{" "}
+                    {sheet.cellCount.toLocaleString()} populated cells
+                  </p>
+                </div>
+                <div className="rounded-[1rem] border border-[var(--border)] bg-[rgba(248,250,251,0.9)] px-4 py-3 text-[var(--muted)]">
+                  Sparse data, virtual rendering, and lightweight formatting
+                  metadata keep this editor fast even as the sheet grows.
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
