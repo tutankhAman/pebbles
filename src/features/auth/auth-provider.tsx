@@ -50,155 +50,157 @@ function AuthOnboardingModal() {
   const isGuestDisabled = !displayName.trim() || isSavingGuest;
 
   return (
-    <div className="pointer-events-auto fixed inset-0 z-50 flex items-center justify-center bg-[rgba(19,34,26,0.22)] p-4 backdrop-blur-md sm:p-6">
-      <div className="relative w-full max-w-5xl overflow-hidden border border-[var(--border-strong)] bg-[linear-gradient(135deg,rgba(248,252,246,0.98),rgba(233,244,231,0.96))] shadow-[0_34px_120px_rgba(23,50,39,0.18)] xl:max-w-[min(78vw,90rem)]">
-        <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(rgba(23,50,39,0.05)_1px,transparent_1px),linear-gradient(90deg,rgba(23,50,39,0.05)_1px,transparent_1px)] bg-[size:88px_88px] opacity-40" />
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(128,239,128,0.3),transparent_30%),radial-gradient(circle_at_82%_18%,rgba(190,214,181,0.48),transparent_26%)]" />
+    <div className="pointer-events-auto fixed inset-0 z-50 overflow-y-auto bg-[rgba(19,34,26,0.22)] p-3 backdrop-blur-md sm:p-5 lg:p-6">
+      <div className="flex min-h-full items-center justify-center">
+        <div className="relative max-h-[calc(100dvh-1.5rem)] w-full max-w-[min(96vw,90rem)] overflow-hidden border border-[var(--border-strong)] bg-[linear-gradient(135deg,rgba(248,252,246,0.98),rgba(233,244,231,0.96))] shadow-[0_34px_120px_rgba(23,50,39,0.18)] sm:max-h-[calc(100dvh-2.5rem)] lg:max-h-[calc(100dvh-3rem)]">
+          <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(rgba(23,50,39,0.05)_1px,transparent_1px),linear-gradient(90deg,rgba(23,50,39,0.05)_1px,transparent_1px)] bg-[size:88px_88px] opacity-40" />
+          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(128,239,128,0.3),transparent_30%),radial-gradient(circle_at_82%_18%,rgba(190,214,181,0.48),transparent_26%)]" />
 
-        <div className="relative grid lg:grid-cols-[1.15fr_0.85fr]">
-          <section className="flex flex-col justify-between border-[var(--border)] border-b px-7 py-8 sm:px-10 sm:py-10 lg:min-h-[38rem] lg:border-r lg:border-b-0 lg:px-14 lg:py-14 xl:min-h-[min(42vw,46rem)] xl:px-[clamp(2.75rem,3.2vw,4.25rem)] xl:py-[clamp(2.25rem,2.8vw,3.5rem)]">
-            <div className="space-y-10">
-              <div className="flex flex-wrap items-center gap-3 text-[0.72rem] text-[var(--muted)] uppercase tracking-[0.28em]">
-                <span className="border border-[var(--border-strong)] px-3 py-2 text-[var(--foreground)]">
-                  Session setup
-                </span>
-                <span>Identity before collaboration</span>
-              </div>
-
-              <div className="space-y-6">
-                <h2 className="max-w-2xl text-4xl leading-[0.96] sm:text-5xl xl:text-[clamp(2.3rem,2.45vw,3.5rem)]">
-                  Enter Pebbles with a stable identity the room can trust.
-                </h2>
-                <p className="max-w-2xl text-[0.95rem] text-[var(--muted)] leading-8 sm:text-[1rem] xl:text-[clamp(0.8rem,0.78vw,1rem)] xl:leading-[1.85]">
-                  Presence indicators, collaborator state, and durable document
-                  joins all depend on a real session identity. Continue with
-                  Google for account-backed access or define a guest name that
-                  stays consistent in this browser.
-                </p>
-              </div>
-            </div>
-
-            <div className="mt-12 grid gap-px border border-[var(--border)] bg-[var(--border)] text-sm sm:grid-cols-3">
-              {[
-                {
-                  detail:
-                    "Selections, cursor color, and write indicators resolve against a known collaborator.",
-                  label: "Presence",
-                  value: "Named participation",
-                },
-                {
-                  detail:
-                    "Guest sessions remain cached locally so refreshes and repeat joins stay coherent.",
-                  label: "Recovery",
-                  value: "Browser-local continuity",
-                },
-                {
-                  detail:
-                    "Choosing identity before entry keeps every room join attributable from the first edit.",
-                  label: "Rooms",
-                  value: "Reliable collaboration",
-                },
-              ].map((item) => (
-                <div
-                  className="space-y-3 bg-[rgba(249,252,247,0.94)] px-5 py-5"
-                  key={item.label}
-                >
-                  <p className="text-[0.68rem] text-[var(--muted)] uppercase tracking-[0.22em]">
-                    {item.label}
-                  </p>
-                  <p className="font-medium text-[0.94rem] text-[var(--foreground)] leading-6 xl:text-[clamp(0.76rem,0.72vw,0.95rem)] xl:leading-[1.45]">
-                    {item.value}
-                  </p>
-                  <p className="text-[0.78rem] text-[var(--muted)] leading-6 xl:text-[clamp(0.66rem,0.62vw,0.82rem)] xl:leading-[1.55]">
-                    {item.detail}
-                  </p>
-                </div>
-              ))}
-            </div>
-          </section>
-
-          <section className="bg-[linear-gradient(180deg,rgba(228,239,226,0.82),rgba(248,252,246,0.96))] px-7 py-8 sm:px-10 sm:py-10 lg:px-12 lg:py-12 xl:px-[clamp(2.5rem,2.8vw,3.5rem)] xl:py-[clamp(2.25rem,2.6vw,3.25rem)]">
-            <div className="border border-[var(--border-strong)] bg-[rgba(248,252,246,0.9)] shadow-[0_20px_60px_rgba(23,50,39,0.08)]">
-              <div className="border-[var(--border)] border-b px-6 py-5 sm:px-8">
-                <p className="text-[0.68rem] text-[var(--muted)] uppercase tracking-[0.24em]">
-                  Access
-                </p>
-                <h3 className="mt-3 text-2xl leading-tight xl:text-[clamp(1.35rem,1.5vw,2rem)]">
-                  Pick how this browser should appear in collaborative rooms.
-                </h3>
-              </div>
-
-              <div className="space-y-6 px-6 py-6 sm:px-8 sm:py-8">
-                <div className="space-y-3">
-                  <p className="text-[0.68rem] text-[var(--muted)] uppercase tracking-[0.24em]">
-                    Guest access
-                  </p>
-                  <label className="block" htmlFor={formId}>
-                    <span className="sr-only">Guest display name</span>
-                    <input
-                      className="w-full border border-[var(--border)] bg-white px-5 py-4 text-[15px] outline-none transition-colors placeholder:text-[var(--muted)]/70 focus:border-[var(--accent)] xl:px-[clamp(1rem,1.15vw,1.35rem)] xl:py-[clamp(0.8rem,0.95vw,1.05rem)] xl:text-[clamp(0.8rem,0.72vw,0.96rem)]"
-                      id={formId}
-                      onChange={(event) => setDisplayName(event.target.value)}
-                      placeholder="Ada Lovelace"
-                      value={displayName}
-                    />
-                  </label>
-                  <p className="text-[0.8rem] text-[var(--muted)] leading-6 xl:text-[clamp(0.68rem,0.62vw,0.84rem)] xl:leading-[1.55]">
-                    Use a clear name so selections, edits, and presence badges
-                    remain readable to everyone in the sheet.
-                  </p>
-                </div>
-
-                <button
-                  className="inline-flex min-h-14 w-full items-center justify-center border border-[var(--accent)] bg-[var(--accent)] px-5 text-sm text-white uppercase tracking-[0.22em] transition-colors hover:bg-transparent hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-60 xl:min-h-[clamp(2.7rem,2.8vw,3.25rem)] xl:px-[clamp(1rem,1.2vw,1.4rem)] xl:text-[clamp(0.68rem,0.62vw,0.84rem)]"
-                  disabled={isGuestDisabled}
-                  onClick={() => {
-                    startGuestTransition(() => {
-                      setGuestIdentity(displayName);
-                    });
-                  }}
-                  type="button"
-                >
-                  {isSavingGuest
-                    ? "Saving guest identity..."
-                    : "Continue as guest"}
-                </button>
-
-                <div className="flex items-center gap-3">
-                  <div className="h-px flex-1 bg-[var(--border)]" />
-                  <span className="text-[0.64rem] text-[var(--muted)] uppercase tracking-[0.22em]">
-                    or
+          <div className="relative grid max-h-[inherit] overflow-y-auto xl:grid-cols-[minmax(0,1.1fr)_minmax(24rem,0.9fr)]">
+            <section className="fluid-panel flex min-h-0 flex-col justify-between border-[var(--border)] border-b xl:border-r xl:border-b-0">
+              <div className="space-y-[clamp(1.75rem,2vw,3rem)]">
+                <div className="fluid-overline flex flex-wrap items-center gap-3 text-[var(--muted)] uppercase">
+                  <span className="border border-[var(--border-strong)] px-3 py-2 text-[var(--foreground)]">
+                    Session setup
                   </span>
-                  <div className="h-px flex-1 bg-[var(--border)]" />
+                  <span>Identity before collaboration</span>
                 </div>
 
-                <button
-                  className="inline-flex min-h-14 w-full items-center justify-center border border-[var(--border-strong)] bg-[rgba(255,255,255,0.78)] px-5 text-[var(--foreground)] text-sm uppercase tracking-[0.22em] transition-colors hover:border-[var(--foreground)] hover:bg-[rgba(255,255,255,0.98)] disabled:cursor-not-allowed disabled:opacity-60 xl:min-h-[clamp(2.7rem,2.8vw,3.25rem)] xl:px-[clamp(1rem,1.2vw,1.4rem)] xl:text-[clamp(0.68rem,0.62vw,0.84rem)]"
-                  disabled={!isConfigured || isPending}
-                  onClick={signInWithGoogle}
-                  type="button"
-                >
-                  {isConfigured
-                    ? "Sign in with Google"
-                    : "Google sign-in unavailable"}
-                </button>
-
-                <div className="border border-[var(--border)] bg-[rgba(255,255,255,0.56)] px-5 py-4">
-                  <p className="text-[0.78rem] text-[var(--muted)] leading-6 xl:text-[clamp(0.66rem,0.62vw,0.82rem)] xl:leading-[1.55]">
-                    Direct document joins stay blocked until identity is
-                    selected, so every room session starts with a real
-                    collaborator attached to it.
+                <div className="space-y-[clamp(1rem,1.2vw,1.5rem)]">
+                  <h2 className="fluid-display max-w-3xl">
+                    Enter Pebbles with a stable identity the room can trust.
+                  </h2>
+                  <p className="fluid-body max-w-2xl text-[var(--muted)]">
+                    Presence indicators, collaborator state, and durable
+                    document joins all depend on a real session identity.
+                    Continue with Google for account-backed access or define a
+                    guest name that stays consistent in this browser.
                   </p>
                 </div>
-
-                {errorMessage ? (
-                  <p className="border border-amber-200 bg-amber-50 px-5 py-4 text-amber-900 text-sm leading-6">
-                    {errorMessage}
-                  </p>
-                ) : null}
               </div>
-            </div>
-          </section>
+
+              <div className="mt-[clamp(1.5rem,2.4vw,3.25rem)] grid gap-px border border-[var(--border)] bg-[var(--border)] text-sm sm:grid-cols-3">
+                {[
+                  {
+                    detail:
+                      "Selections, cursor color, and write indicators resolve against a known collaborator.",
+                    label: "Presence",
+                    value: "Named participation",
+                  },
+                  {
+                    detail:
+                      "Guest sessions remain cached locally so refreshes and repeat joins stay coherent.",
+                    label: "Recovery",
+                    value: "Browser-local continuity",
+                  },
+                  {
+                    detail:
+                      "Choosing identity before entry keeps every room join attributable from the first edit.",
+                    label: "Rooms",
+                    value: "Reliable collaboration",
+                  },
+                ].map((item) => (
+                  <div
+                    className="space-y-3 bg-[rgba(249,252,247,0.94)] px-[clamp(1rem,1.3vw,1.4rem)] py-[clamp(1rem,1.4vw,1.5rem)]"
+                    key={item.label}
+                  >
+                    <p className="fluid-label text-[var(--muted)] uppercase">
+                      {item.label}
+                    </p>
+                    <p className="fluid-body font-medium text-[var(--foreground)]">
+                      {item.value}
+                    </p>
+                    <p className="fluid-body-tight text-[var(--muted)]">
+                      {item.detail}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="fluid-panel bg-[linear-gradient(180deg,rgba(228,239,226,0.82),rgba(248,252,246,0.96))]">
+              <div className="border border-[var(--border-strong)] bg-[rgba(248,252,246,0.9)] shadow-[0_20px_60px_rgba(23,50,39,0.08)]">
+                <div className="fluid-panel-tight border-[var(--border)] border-b">
+                  <p className="fluid-label text-[var(--muted)] uppercase">
+                    Access
+                  </p>
+                  <h3 className="fluid-title mt-3">
+                    Pick how this browser should appear in collaborative rooms.
+                  </h3>
+                </div>
+
+                <div className="fluid-panel-tight space-y-[clamp(1rem,1.4vw,1.6rem)]">
+                  <div className="space-y-3">
+                    <p className="fluid-label text-[var(--muted)] uppercase">
+                      Guest access
+                    </p>
+                    <label className="block" htmlFor={formId}>
+                      <span className="sr-only">Guest display name</span>
+                      <input
+                        className="fluid-input w-full border border-[var(--border)] bg-white px-[clamp(0.9rem,1.2vw,1.35rem)] py-[clamp(0.8rem,1vw,1rem)] outline-none transition-colors placeholder:text-[var(--muted)]/70 focus:border-[var(--accent)]"
+                        id={formId}
+                        onChange={(event) => setDisplayName(event.target.value)}
+                        placeholder="Ada Lovelace"
+                        value={displayName}
+                      />
+                    </label>
+                    <p className="fluid-body-tight text-[var(--muted)]">
+                      Use a clear name so selections, edits, and presence badges
+                      remain readable to everyone in the sheet.
+                    </p>
+                  </div>
+
+                  <button
+                    className="fluid-button inline-flex min-h-[clamp(2.9rem,4vw,3.5rem)] w-full items-center justify-center border border-[var(--accent)] bg-[var(--accent)] px-[clamp(1rem,1.25vw,1.4rem)] text-white uppercase transition-colors hover:bg-transparent hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={isGuestDisabled}
+                    onClick={() => {
+                      startGuestTransition(() => {
+                        setGuestIdentity(displayName);
+                      });
+                    }}
+                    type="button"
+                  >
+                    {isSavingGuest
+                      ? "Saving guest identity..."
+                      : "Continue as guest"}
+                  </button>
+
+                  <div className="flex items-center gap-3">
+                    <div className="h-px flex-1 bg-[var(--border)]" />
+                    <span className="fluid-micro text-[var(--muted)] uppercase">
+                      or
+                    </span>
+                    <div className="h-px flex-1 bg-[var(--border)]" />
+                  </div>
+
+                  <button
+                    className="fluid-button inline-flex min-h-[clamp(2.9rem,4vw,3.5rem)] w-full items-center justify-center border border-[var(--border-strong)] bg-[rgba(255,255,255,0.78)] px-[clamp(1rem,1.25vw,1.4rem)] text-[var(--foreground)] uppercase transition-colors hover:border-[var(--foreground)] hover:bg-[rgba(255,255,255,0.98)] disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={!isConfigured || isPending}
+                    onClick={signInWithGoogle}
+                    type="button"
+                  >
+                    {isConfigured
+                      ? "Sign in with Google"
+                      : "Google sign-in unavailable"}
+                  </button>
+
+                  <div className="border border-[var(--border)] bg-[rgba(255,255,255,0.56)] px-[clamp(1rem,1.2vw,1.35rem)] py-[clamp(0.9rem,1vw,1.15rem)]">
+                    <p className="fluid-body-tight text-[var(--muted)]">
+                      Direct document joins stay blocked until identity is
+                      selected, so every room session starts with a real
+                      collaborator attached to it.
+                    </p>
+                  </div>
+
+                  {errorMessage ? (
+                    <p className="border border-amber-200 bg-amber-50 px-[clamp(1rem,1.2vw,1.35rem)] py-[clamp(0.9rem,1vw,1.15rem)] text-amber-900 text-sm leading-6">
+                      {errorMessage}
+                    </p>
+                  ) : null}
+                </div>
+              </div>
+            </section>
+          </div>
         </div>
       </div>
     </div>

@@ -245,22 +245,22 @@ export function DashboardShell() {
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(rgba(23,50,39,0.05)_1px,transparent_1px),linear-gradient(90deg,rgba(23,50,39,0.05)_1px,transparent_1px)] bg-[size:96px_96px] opacity-40" />
       <div className="pointer-events-none absolute inset-x-0 top-0 h-[42rem] bg-[radial-gradient(circle_at_top_left,rgba(190,214,181,0.52),transparent_34%),radial-gradient(circle_at_78%_18%,rgba(128,239,128,0.24),transparent_26%),linear-gradient(180deg,rgba(255,255,255,0.72),transparent)] [animation:drift_14s_ease-in-out_infinite_alternate]" />
 
-      <section className="relative mx-auto flex min-h-screen w-full max-w-[96rem] flex-col justify-center gap-5 px-6 py-8 sm:px-10 sm:py-10 lg:px-16 lg:py-14 xl:gap-[clamp(1.1rem,1.25vw,1.75rem)] xl:px-[clamp(3rem,4vw,5rem)] xl:py-[clamp(2.2rem,2.8vw,3.25rem)]">
+      <section className="fluid-shell relative mx-auto flex min-h-screen w-full max-w-[96rem] flex-col justify-center">
         <nav className="w-full border border-[var(--border-strong)] bg-[rgba(248,252,246,0.84)] shadow-[0_18px_48px_rgba(23,50,39,0.08)] [animation:section-enter_650ms_cubic-bezier(0.16,1,0.3,1)_both]">
-          <div className="flex flex-col gap-5 px-6 py-5 sm:px-8 lg:flex-row lg:items-center lg:justify-between">
+          <div className="fluid-panel-tight flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
               <Link
-                className="inline-flex border border-[var(--border-strong)] px-3 py-2 text-[0.72rem] text-[var(--foreground)] uppercase tracking-[0.28em]"
+                className="fluid-overline inline-flex border border-[var(--border-strong)] px-3 py-2 text-[var(--foreground)] uppercase"
                 href="/"
               >
                 Pebbles
               </Link>
-              <p className="max-w-md text-[0.72rem] text-[var(--muted)] uppercase tracking-[0.26em]">
+              <p className="fluid-overline max-w-md text-[var(--muted)] uppercase">
                 Dashboard workspace
               </p>
             </div>
 
-            <div className="flex flex-wrap items-center gap-3 text-[0.72rem] text-[var(--muted)] uppercase tracking-[0.22em]">
+            <div className="fluid-label flex flex-wrap items-center gap-3 text-[var(--muted)] uppercase">
               <span className="border border-[var(--border)] px-3 py-2">
                 driver: {getMetadataDriverLabel()}
               </span>
@@ -290,9 +290,9 @@ export function DashboardShell() {
         </nav>
 
         <div className="grid w-full overflow-hidden border border-[var(--border-strong)] bg-[var(--panel)] shadow-[0_30px_90px_rgba(23,50,39,0.1)] [animation:section-enter_800ms_cubic-bezier(0.16,1,0.3,1)_both] xl:grid-cols-[0.92fr_1.08fr]">
-          <section className="flex flex-col justify-between border-[var(--border)] border-b px-6 py-8 sm:px-10 sm:py-10 xl:min-h-[50rem] xl:border-r xl:border-b-0 xl:px-14 xl:py-14">
+          <section className="fluid-panel flex flex-col justify-between border-[var(--border)] border-b xl:min-h-[50rem] xl:border-r xl:border-b-0">
             <div className="space-y-10">
-              <div className="flex flex-wrap items-center gap-3 text-[0.72rem] text-[var(--muted)] uppercase tracking-[0.28em]">
+              <div className="fluid-overline flex flex-wrap items-center gap-3 text-[var(--muted)] uppercase">
                 <span className="border border-[var(--border-strong)] px-3 py-2">
                   Dashboard
                 </span>
@@ -300,10 +300,10 @@ export function DashboardShell() {
               </div>
 
               <div className="space-y-5">
-                <h1 className="max-w-4xl text-4xl leading-[0.96] sm:text-5xl xl:text-[clamp(2.3rem,2.6vw,3.6rem)]">
+                <h1 className="fluid-display max-w-4xl">
                   Create, inspect, and launch collaborative spreadsheet rooms.
                 </h1>
-                <p className="max-w-2xl text-[0.84rem] text-[var(--muted)] leading-7 sm:text-[0.9rem] xl:text-[clamp(0.76rem,0.72vw,0.95rem)] xl:leading-[1.8]">
+                <p className="fluid-body max-w-2xl text-[var(--muted)]">
                   Metadata-backed sheets, identity, and document launch in one
                   place.
                 </p>
@@ -311,7 +311,7 @@ export function DashboardShell() {
 
               <div className="grid gap-px border border-[var(--border)] bg-[var(--border)] sm:grid-cols-2">
                 <div className="space-y-3 bg-[rgba(249,252,247,0.94)] px-5 py-5">
-                  <p className="text-[0.68rem] text-[var(--muted)] uppercase tracking-[0.22em]">
+                  <p className="fluid-label text-[var(--muted)] uppercase">
                     Active identity
                   </p>
                   <div className="flex items-center gap-3">
@@ -323,10 +323,8 @@ export function DashboardShell() {
                       }}
                     />
                     <div>
-                      <p className="text-[0.86rem] leading-5 xl:text-[clamp(0.74rem,0.72vw,0.92rem)] xl:leading-[1.45]">
-                        {identityLabel}
-                      </p>
-                      <p className="text-[0.72rem] text-[var(--muted)] leading-5 xl:text-[clamp(0.62rem,0.58vw,0.78rem)] xl:leading-[1.4]">
+                      <p className="fluid-body-tight">{identityLabel}</p>
+                      <p className="fluid-micro text-[var(--muted)]">
                         {session
                           ? `user id: ${session.userId}`
                           : "identity required"}
@@ -336,15 +334,15 @@ export function DashboardShell() {
                 </div>
 
                 <div className="space-y-3 bg-[rgba(249,252,247,0.94)] px-5 py-5">
-                  <p className="text-[0.68rem] text-[var(--muted)] uppercase tracking-[0.22em]">
+                  <p className="fluid-label text-[var(--muted)] uppercase">
                     Latest activity
                   </p>
-                  <p className="text-[0.86rem] leading-5 xl:text-[clamp(0.74rem,0.72vw,0.92rem)] xl:leading-[1.45]">
+                  <p className="fluid-body-tight">
                     {recentDocument
                       ? recentDocument.title
                       : "No collaborative documents yet"}
                   </p>
-                  <p className="text-[0.72rem] text-[var(--muted)] leading-5 xl:text-[clamp(0.62rem,0.58vw,0.78rem)] xl:leading-[1.4]">
+                  <p className="fluid-micro text-[var(--muted)]">
                     {recentDocument
                       ? formatTimestamp(recentDocument.lastModifiedAt)
                       : "Create the first room-backed spreadsheet to begin."}
@@ -374,10 +372,10 @@ export function DashboardShell() {
                     className="space-y-3 bg-[rgba(249,252,247,0.94)] px-5 py-5"
                     key={item.label}
                   >
-                    <p className="text-[0.68rem] text-[var(--muted)] uppercase tracking-[0.22em]">
+                    <p className="fluid-label text-[var(--muted)] uppercase">
                       {item.label}
                     </p>
-                    <p className="font-medium text-[0.84rem] text-[var(--foreground)] leading-5 xl:text-[clamp(0.72rem,0.68vw,0.88rem)] xl:leading-[1.4]">
+                    <p className="fluid-body-tight font-medium text-[var(--foreground)]">
                       {item.value}
                     </p>
                   </div>
@@ -386,44 +384,42 @@ export function DashboardShell() {
             </div>
           </section>
 
-          <section className="bg-[linear-gradient(180deg,rgba(228,239,226,0.82),rgba(248,252,246,0.96))] px-6 py-8 sm:px-10 sm:py-10 xl:px-12 xl:py-12">
+          <section className="fluid-panel bg-[linear-gradient(180deg,rgba(228,239,226,0.82),rgba(248,252,246,0.96))]">
             <div className="border border-[var(--border-strong)] bg-[rgba(248,252,246,0.9)] shadow-[0_20px_60px_rgba(23,50,39,0.08)]">
               <div className="grid gap-px border-[var(--border)] border-b bg-[var(--border)] lg:grid-cols-[1fr_auto]">
-                <div className="space-y-3 bg-[rgba(249,252,247,0.95)] px-6 py-6 sm:px-8">
-                  <p className="text-[0.68rem] text-[var(--muted)] uppercase tracking-[0.24em]">
+                <div className="fluid-panel-tight space-y-3 bg-[rgba(249,252,247,0.95)]">
+                  <p className="fluid-label text-[var(--muted)] uppercase">
                     Documents
                   </p>
-                  <h2 className="text-[1.7rem] leading-tight xl:text-[clamp(1.35rem,1.7vw,2rem)]">
+                  <h2 className="fluid-title">
                     Metadata-backed sheets ready to open.
                   </h2>
-                  <p className="max-w-2xl text-[0.84rem] text-[var(--muted)] leading-7 xl:text-[clamp(0.74rem,0.68vw,0.9rem)] xl:leading-[1.7]">
+                  <p className="fluid-body-tight max-w-2xl text-[var(--muted)]">
                     Open, create, or remove sheets from here.
                   </p>
                 </div>
 
-                <div className="flex flex-col justify-center gap-3 bg-[rgba(249,252,247,0.95)] px-6 py-6 sm:px-8">
-                  <p className="text-[0.68rem] text-[var(--muted)] uppercase tracking-[0.24em]">
+                <div className="fluid-panel-tight flex flex-col justify-center gap-3 bg-[rgba(249,252,247,0.95)]">
+                  <p className="fluid-label text-[var(--muted)] uppercase">
                     Count
                   </p>
-                  <p className="text-[2rem] leading-none xl:text-[clamp(1.5rem,1.9vw,2.2rem)]">
-                    {documents.length}
-                  </p>
+                  <p className="fluid-metric">{documents.length}</p>
                 </div>
               </div>
 
-              <div className="border-[var(--border)] border-b bg-[rgba(255,255,255,0.56)] px-6 py-6 sm:px-8 sm:py-8">
+              <div className="fluid-panel-tight border-[var(--border)] border-b bg-[rgba(255,255,255,0.56)]">
                 <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
                   <div className="max-w-xl space-y-3">
-                    <p className="text-[0.68rem] text-[var(--muted)] uppercase tracking-[0.24em]">
+                    <p className="fluid-label text-[var(--muted)] uppercase">
                       Create document
                     </p>
-                    <p className="text-[0.78rem] text-[var(--muted)] leading-6 xl:text-[clamp(0.68rem,0.62vw,0.82rem)] xl:leading-[1.55]">
+                    <p className="fluid-micro text-[var(--muted)]">
                       Create a new sheet and open it immediately.
                     </p>
                   </div>
 
                   <button
-                    className="inline-flex min-h-12 items-center justify-center border border-[var(--accent)] bg-[var(--accent)] px-5 text-[0.82rem] text-white uppercase tracking-[0.2em] transition-colors hover:bg-transparent hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-60 xl:min-h-[clamp(2.5rem,2.6vw,3rem)] xl:px-[clamp(1rem,1.2vw,1.4rem)] xl:text-[clamp(0.68rem,0.62vw,0.82rem)]"
+                    className="fluid-button inline-flex min-h-12 items-center justify-center border border-[var(--accent)] bg-[var(--accent)] px-5 text-white uppercase transition-colors hover:bg-transparent hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-60"
                     disabled={isCreatingDocument || !session}
                     onClick={() => {
                       if (!session) {
@@ -450,11 +446,11 @@ export function DashboardShell() {
                 </div>
 
                 <label className="mt-5 block">
-                  <span className="text-[0.68rem] text-[var(--muted)] uppercase tracking-[0.24em]">
+                  <span className="fluid-label text-[var(--muted)] uppercase">
                     New document title
                   </span>
                   <input
-                    className="mt-3 w-full border border-[var(--border)] bg-white px-5 py-4 text-[15px] outline-none transition-colors placeholder:text-[var(--muted)]/70 focus:border-[var(--accent)] xl:px-[clamp(1rem,1.15vw,1.35rem)] xl:py-[clamp(0.8rem,0.95vw,1.05rem)] xl:text-[clamp(0.78rem,0.72vw,0.95rem)]"
+                    className="fluid-input mt-3 w-full border border-[var(--border)] bg-white px-5 py-4 outline-none transition-colors placeholder:text-[var(--muted)]/70 focus:border-[var(--accent)]"
                     onChange={(event: ChangeEvent<HTMLInputElement>) =>
                       setDocumentTitle(event.target.value)
                     }
@@ -463,7 +459,7 @@ export function DashboardShell() {
                   />
                 </label>
 
-                <p className="mt-3 max-w-xl text-[0.72rem] text-[var(--muted)] leading-5 xl:text-[clamp(0.62rem,0.56vw,0.76rem)] xl:leading-[1.4]">
+                <p className="fluid-micro mt-3 max-w-xl text-[var(--muted)]">
                   {trimmedTitle
                     ? `Ready to create: ${trimmedTitle}`
                     : "Optional title. The sheet can still be created without one."}
@@ -471,13 +467,13 @@ export function DashboardShell() {
               </div>
 
               {pendingDeleteDocument ? (
-                <div className="border-[var(--border)] border-b bg-[rgba(139,58,58,0.04)] px-6 py-6 sm:px-8 sm:py-8">
+                <div className="fluid-panel-tight border-[var(--border)] border-b bg-[rgba(139,58,58,0.04)]">
                   <div className="flex flex-col gap-5 xl:flex-row xl:items-center xl:justify-between">
                     <div className="max-w-2xl space-y-3">
-                      <p className="text-[#8b3a3a] text-[0.68rem] uppercase tracking-[0.24em]">
+                      <p className="fluid-label text-[#8b3a3a] uppercase">
                         Delete sheet
                       </p>
-                      <p className="text-[0.82rem] leading-6 xl:text-[clamp(0.7rem,0.66vw,0.86rem)] xl:leading-[1.5]">
+                      <p className="fluid-body-tight">
                         Remove{" "}
                         <span className="font-medium">
                           {pendingDeleteDocument.title}
@@ -488,7 +484,7 @@ export function DashboardShell() {
 
                     <div className="flex flex-col gap-3 sm:flex-row">
                       <button
-                        className="inline-flex min-h-11 items-center justify-center border border-[var(--border)] px-4 text-[0.7rem] text-[var(--foreground)] uppercase tracking-[0.2em] transition-colors hover:border-[var(--foreground)] xl:min-h-[clamp(2.3rem,2.35vw,2.8rem)] xl:px-[clamp(0.85rem,1vw,1.15rem)] xl:text-[clamp(0.6rem,0.55vw,0.72rem)]"
+                        className="fluid-button inline-flex min-h-11 items-center justify-center border border-[var(--border)] px-4 text-[var(--foreground)] uppercase transition-colors hover:border-[var(--foreground)]"
                         onClick={() => {
                           setPendingDeleteDocument(null);
                         }}
@@ -497,7 +493,7 @@ export function DashboardShell() {
                         Cancel
                       </button>
                       <button
-                        className="inline-flex min-h-11 items-center justify-center border border-[#8b3a3a] bg-[#8b3a3a] px-4 text-[0.7rem] text-white uppercase tracking-[0.2em] transition-colors hover:bg-transparent hover:text-[#8b3a3a] disabled:cursor-not-allowed disabled:opacity-60 xl:min-h-[clamp(2.3rem,2.35vw,2.8rem)] xl:px-[clamp(0.85rem,1vw,1.15rem)] xl:text-[clamp(0.6rem,0.55vw,0.72rem)]"
+                        className="fluid-button inline-flex min-h-11 items-center justify-center border border-[#8b3a3a] bg-[#8b3a3a] px-4 text-white uppercase transition-colors hover:bg-transparent hover:text-[#8b3a3a] disabled:cursor-not-allowed disabled:opacity-60"
                         disabled={
                           deletingDocumentId === pendingDeleteDocument.id
                         }

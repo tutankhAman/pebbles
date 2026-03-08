@@ -16,6 +16,13 @@ export type CollaborationStatus =
   | "reconnecting"
   | "offline";
 
+export interface CollaborationPresenceSnapshot {
+  activeCell: string | null;
+  lastRemoteLatencyMs: number | null;
+  peers: PresenceState[];
+  status: CollaborationStatus;
+}
+
 export interface CollaborationRoom {
   documentId: string;
   roomId: string;

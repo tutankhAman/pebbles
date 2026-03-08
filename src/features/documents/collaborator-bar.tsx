@@ -1,0 +1,277 @@
+"use client";
+
+import { thumbs } from "@dicebear/collection";
+import { createAvatar } from "@dicebear/core";
+import Image from "next/image";
+import { useEffect, useRef, useState } from "react";
+import type {
+  CollaborationPresenceSnapshot,
+  PresenceState,
+} from "@/types/collaboration";
+import type { SessionIdentity } from "@/types/metadata";
+
+const AVATAR_BACKGROUND_COLORS = [
+  "1a73e8",
+  "4285f4",
+  "34a853",
+  "12b5cb",
+  "f9ab00",
+  "f29900",
+  "c5221f",
+  "a142f4",
+] as const;
+
+interface CollaboratorBarProps {
+  collaboration: CollaborationPresenceSnapshot;
+  session: SessionIdentity | null;
+}
+
+interface CollaboratorSummary {
+  activeCell: string | null;
+  color: string;
+  displayName: string;
+  isCurrentUser: boolean;
+  selection?: PresenceState["selection"];
+  userId: string;
+}
+
+function createAvatarDataUri(seed: string) {
+  return createAvatar(thumbs, {
+    backgroundColor: [...AVATAR_BACKGROUND_COLORS],
+    eyesColor: ["ffffff"],
+    mouthColor: ["ffffff"],
+    seed,
+    shapeColor: ["0b57d0", "1a73e8", "188038", "b06000", "b3261e"],
+  }).toDataUri();
+}
+
+function getCollaborationStatusLabel(
+  status: CollaborationPresenceSnapshot["status"]
+) {
+  switch (status) {
+    case "connected":
+      return "Live";
+    case "connecting":
+      return "Joining";
+    case "reconnecting":
+      return "Syncing";
+    case "offline":
+      return "Offline";
+    default:
+      return "Idle";
+  }
+}
+
+function getStatusDotClassName(
+  status: CollaborationPresenceSnapshot["status"]
+) {
+  switch (status) {
+    case "connected":
+      return "bg-[#1e8e3e]";
+    case "offline":
+      return "bg-[#d93025]";
+    default:
+      return "bg-[#1a73e8]";
+  }
+}
+
+function getSelectedCellLabel(collaborator: CollaboratorSummary) {
+  if (collaborator.selection) {
+    const { end, start } = collaborator.selection;
+
+    if (start === end) {
+      return start;
+    }
+
+    return `${start}:${end}`;
+  }
+
+  return collaborator.activeCell ?? "No active cell";
+}
+
+function createCollaboratorList(args: CollaboratorBarProps) {
+  const collaborators: CollaboratorSummary[] = args.session
+    ? [
+        {
+          activeCell: args.collaboration.activeCell,
+          color: args.session.color,
+          displayName: args.session.displayName,
+          isCurrentUser: true,
+          userId: args.session.userId,
+        },
+      ]
+    : [];
+
+  for (const peer of args.collaboration.peers) {
+    collaborators.push({
+      activeCell: peer.activeCell ?? null,
+      color: peer.color,
+      displayName: peer.displayName,
+      isCurrentUser: false,
+      selection: peer.selection,
+      userId: peer.userId,
+    });
+  }
+
+  return collaborators;
+}
+
+export function CollaboratorBar({
+  collaboration,
+  session,
+}: CollaboratorBarProps) {
+  const [openCollaboratorId, setOpenCollaboratorId] = useState<string | null>(
+    null
+  );
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const collaborators = createCollaboratorList({
+    collaboration,
+    session,
+  });
+  const statusLabel = getCollaborationStatusLabel(collaboration.status);
+  const statusDotClassName = getStatusDotClassName(collaboration.status);
+
+  useEffect(() => {
+    if (openCollaboratorId == null) {
+      return;
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (
+        event.target instanceof Node &&
+        !rootRef.current?.contains(event.target)
+      ) {
+        setOpenCollaboratorId(null);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpenCollaboratorId(null);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("pointerdown", handlePointerDown);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("pointerdown", handlePointerDown);
+    };
+  }, [openCollaboratorId]);
+
+  useEffect(() => {
+    if (
+      openCollaboratorId &&
+      !collaborators.some(
+        (collaborator) => collaborator.userId === openCollaboratorId
+      )
+    ) {
+      setOpenCollaboratorId(null);
+    }
+  }, [collaborators, openCollaboratorId]);
+
+  return (
+    <div
+      className="relative z-50 flex min-w-0 items-center justify-end gap-2"
+      ref={rootRef}
+    >
+      <div className="hidden rounded-full border border-[#dadce0] bg-[#f8f9fa] px-3 py-1.5 text-[#5f6368] text-[0.6875rem] leading-none md:inline-flex md:items-center md:gap-2">
+        <span className={`h-2 w-2 rounded-full ${statusDotClassName}`} />
+        <span>{statusLabel}</span>
+        {collaboration.lastRemoteLatencyMs != null ? (
+          <span className="text-[#80868b]">
+            {collaboration.lastRemoteLatencyMs}ms
+          </span>
+        ) : null}
+      </div>
+
+      <div className="flex min-w-0 items-center gap-2 rounded-full border border-[#dadce0] bg-[#f8f9fa] px-2 py-1">
+        <span className="hidden pl-1.5 font-medium text-[#3c4043] text-[0.6875rem] leading-none sm:inline">
+          {collaborators.length} user{collaborators.length === 1 ? "" : "s"}
+        </span>
+
+        <div className="flex min-w-0 items-center overflow-visible pr-1">
+          {collaborators.map((collaborator) => {
+            const isOpen = collaborator.userId === openCollaboratorId;
+            const selectedCellLabel = getSelectedCellLabel(collaborator);
+
+            return (
+              <div
+                className="relative -ml-1.5 first:ml-0"
+                key={collaborator.userId}
+              >
+                <button
+                  aria-expanded={isOpen}
+                  aria-haspopup="dialog"
+                  aria-label={`View collaborator details for ${collaborator.displayName}`}
+                  className={`relative flex h-9 w-9 items-center justify-center overflow-hidden rounded-full border-2 bg-white shadow-[0_1px_2px_rgba(60,64,67,0.16)] transition-transform hover:z-10 hover:-translate-y-0.5 focus-visible:z-10 focus-visible:-translate-y-0.5 focus-visible:outline-none ${
+                    isOpen ? "z-20 scale-[1.04]" : "z-0"
+                  }`}
+                  onClick={() => {
+                    setOpenCollaboratorId((currentValue) =>
+                      currentValue === collaborator.userId
+                        ? null
+                        : collaborator.userId
+                    );
+                  }}
+                  onPointerDown={(event) => {
+                    event.stopPropagation();
+                  }}
+                  style={{
+                    borderColor: collaborator.color,
+                  }}
+                  type="button"
+                >
+                  <Image
+                    alt={`${collaborator.displayName} avatar`}
+                    className="h-full w-full"
+                    height={36}
+                    src={createAvatarDataUri(
+                      `${collaborator.userId}:${collaborator.displayName}`
+                    )}
+                    unoptimized
+                    width={36}
+                  />
+                </button>
+
+                {isOpen ? (
+                  <div
+                    className="pointer-events-auto absolute top-[calc(100%+0.625rem)] right-0 z-30 w-60 rounded-2xl border border-[#dadce0] bg-white p-4 text-left shadow-[0_18px_48px_rgba(60,64,67,0.18)]"
+                    onPointerDown={(event) => {
+                      event.stopPropagation();
+                    }}
+                    role="dialog"
+                  >
+                    <div className="mb-3 flex items-start gap-3">
+                      <div
+                        className="h-3 w-3 rounded-full"
+                        style={{ backgroundColor: collaborator.color }}
+                      />
+                      <div className="min-w-0">
+                        <p className="truncate font-medium text-[#202124] text-[0.875rem] leading-5">
+                          {collaborator.displayName}
+                        </p>
+                        <p className="text-[#5f6368] text-[0.6875rem] uppercase tracking-[0.16em]">
+                          {collaborator.isCurrentUser ? "You" : "Collaborator"}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl bg-[#f8f9fa] px-3 py-2.5">
+                      <p className="text-[#5f6368] text-[0.625rem] uppercase tracking-[0.18em]">
+                        Cell selected
+                      </p>
+                      <p className="mt-1 font-medium text-[#202124] text-[0.9375rem] leading-5">
+                        {selectedCellLabel}
+                      </p>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
