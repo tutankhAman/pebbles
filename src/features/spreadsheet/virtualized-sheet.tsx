@@ -13,7 +13,11 @@ import {
 } from "react";
 import { useCollaborationRoom } from "@/features/collaboration/use-collaboration-room";
 import { useFormulaEngine } from "@/features/formulas/use-formula-engine";
-import { createCellKey } from "@/features/spreadsheet/addressing";
+import {
+  createCellKey,
+  normalizeRange,
+  parseCellKey,
+} from "@/features/spreadsheet/addressing";
 import { getVisibleWindow } from "@/features/spreadsheet/chunks";
 import {
   createCellSelection,
@@ -123,6 +127,18 @@ function getRenderedCellValue(args: {
 
 function buildSequence(start: number, end: number) {
   return Array.from({ length: end - start + 1 }, (_, index) => start + index);
+}
+
+function getCellKind(raw: string): CellRecord["kind"] {
+  if (raw.startsWith("=")) {
+    return "formula";
+  }
+
+  if (raw.trim() !== "" && Number.isFinite(Number(raw))) {
+    return "number";
+  }
+
+  return "text";
 }
 
 function getSelectionMatrix(sheet: SparseSheet, selection: Selection) {
@@ -360,12 +376,18 @@ export function VirtualizedSheet({
       ),
     [visibleColumns, visibleRows]
   );
-  const { batchUpsert, computedValues, deleteCell, formulaErrors, isReady } =
-    useFormulaEngine({
-      bounds,
-      initialCells: initialFormulaCells,
-      visibleKeys,
-    });
+  const {
+    batchUpsert,
+    computedValues,
+    deleteCell,
+    formulaErrors,
+    isReady,
+    upsertCell: upsertFormulaCell,
+  } = useFormulaEngine({
+    bounds,
+    initialCells: initialFormulaCells,
+    visibleKeys,
+  });
   const handleCollaborativeCellChanges = useEffectEvent(
     (changes: Array<{ key: string; value: CellRecord | null }>) => {
       const sheetModel = sheetRef.current;
@@ -414,6 +436,68 @@ export function VirtualizedSheet({
   const activeCellRaw = getCellDisplayValue(activeCellRecord);
   const syncDocumentTimestamp = () => {
     touchDocument(document.id).catch(() => undefined);
+  };
+
+  const applyOptimisticCellWrite = (address: CellAddress, raw: string) => {
+    const key = createCellKey(address);
+
+    if (raw.trim() === "") {
+      const changed = sheet.clearCell(address);
+
+      if (changed) {
+        deleteCell(key);
+        setSheetRevision((current) => current + 1);
+      }
+
+      return;
+    }
+
+    sheet.setCellByKey(key, {
+      kind: getCellKind(raw),
+      raw,
+    });
+    upsertFormulaCell({
+      key,
+      raw,
+    });
+    setSheetRevision((current) => current + 1);
+  };
+
+  const applyOptimisticBatchWrite = (
+    cells: Array<{
+      key: string;
+      raw: string;
+    }>
+  ) => {
+    if (cells.length === 0) {
+      return;
+    }
+
+    const formulaUpserts: Array<{ key: string; raw: string }> = [];
+    let didChange = false;
+
+    for (const cell of cells) {
+      if (cell.raw.trim() === "") {
+        didChange = sheet.clearCellByKey(cell.key) || didChange;
+        deleteCell(cell.key);
+        continue;
+      }
+
+      sheet.setCellByKey(cell.key, {
+        kind: getCellKind(cell.raw),
+        raw: cell.raw,
+      });
+      formulaUpserts.push(cell);
+      didChange = true;
+    }
+
+    if (formulaUpserts.length > 0) {
+      batchUpsert(formulaUpserts);
+    }
+
+    if (didChange) {
+      setSheetRevision((current) => current + 1);
+    }
   };
 
   const setNextWriteState = (nextWriteState: WriteState) => {
@@ -483,6 +567,7 @@ export function VirtualizedSheet({
   const writeCell = (address: CellAddress, value: string) => {
     const key = createCellKey(address);
 
+    applyOptimisticCellWrite(address, value);
     syncUpsertCell({
       key,
       raw: value,
@@ -492,7 +577,6 @@ export function VirtualizedSheet({
   };
 
   const clearSelectionContents = () => {
-    let changed = false;
     const clearedKeys: Array<{
       key: string;
       raw: string;
@@ -508,19 +592,18 @@ export function VirtualizedSheet({
         col <= selectionBounds.end.col;
         col += 1
       ) {
-        const address = { col, row };
-        changed = sheet.clearCell(address) || changed;
         clearedKeys.push({
-          key: createCellKey(address),
+          key: createCellKey({ col, row }),
           raw: "",
         });
       }
     }
 
-    if (!changed) {
+    if (clearedKeys.length === 0) {
       return;
     }
 
+    applyOptimisticBatchWrite(clearedKeys);
     syncBatchUpsert(clearedKeys);
     scheduleWriteConfirmation();
     syncDocumentTimestamp();
@@ -791,17 +874,18 @@ export function VirtualizedSheet({
       return;
     }
 
-    syncBatchUpsert(
-      matrix.flatMap((rowValues, rowOffset) =>
-        rowValues.map((value, colOffset) => ({
-          key: createCellKey({
-            col: selectionBounds.start.col + colOffset,
-            row: selectionBounds.start.row + rowOffset,
-          }),
-          raw: value,
-        }))
-      )
+    const pastedCells = matrix.flatMap((rowValues, rowOffset) =>
+      rowValues.map((value, colOffset) => ({
+        key: createCellKey({
+          col: selectionBounds.start.col + colOffset,
+          row: selectionBounds.start.row + rowOffset,
+        }),
+        raw: value,
+      }))
     );
+
+    applyOptimisticBatchWrite(pastedCells);
+    syncBatchUpsert(pastedCells);
     scheduleWriteConfirmation();
     syncDocumentTimestamp();
 
@@ -1132,6 +1216,53 @@ export function VirtualizedSheet({
                 width: activeCellLayout.width,
               }}
             />
+
+            {peers.map((peer) => {
+              const peerActiveCell = peer.activeCell
+                ? parseCellKey(peer.activeCell)
+                : null;
+              const peerSelection = peer.selection
+                ? normalizeRange(
+                    parseCellKey(peer.selection.start),
+                    parseCellKey(peer.selection.end)
+                  )
+                : null;
+
+              return (
+                <div key={`peer-overlay-${peer.userId}`}>
+                  {peerSelection ? (
+                    <div
+                      className="pointer-events-none absolute rounded-[0.8rem] border-2"
+                      style={{
+                        borderColor: peer.color,
+                        height:
+                          getCellLayout(peerSelection.end).top -
+                          getCellLayout(peerSelection.start).top +
+                          getCellLayout(peerSelection.end).height,
+                        left: getCellLayout(peerSelection.start).left,
+                        top: getCellLayout(peerSelection.start).top,
+                        width:
+                          getCellLayout(peerSelection.end).left -
+                          getCellLayout(peerSelection.start).left +
+                          getCellLayout(peerSelection.end).width,
+                      }}
+                    />
+                  ) : null}
+                  {peerActiveCell ? (
+                    <div
+                      className="pointer-events-none absolute rounded-[0.7rem] border-2"
+                      style={{
+                        borderColor: peer.color,
+                        height: getCellLayout(peerActiveCell).height,
+                        left: getCellLayout(peerActiveCell).left,
+                        top: getCellLayout(peerActiveCell).top,
+                        width: getCellLayout(peerActiveCell).width,
+                      }}
+                    />
+                  ) : null}
+                </div>
+              );
+            })}
 
             {editingAddress && editingSurface === "cell" ? (
               <div
