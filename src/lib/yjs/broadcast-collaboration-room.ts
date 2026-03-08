@@ -5,7 +5,13 @@ import {
   applyAwarenessUpdate,
   encodeAwarenessUpdate,
 } from "y-protocols/awareness";
-import { applyUpdate, Doc, encodeStateAsUpdate, type Map as YMap } from "yjs";
+import {
+  applyUpdate,
+  Doc,
+  encodeStateAsUpdate,
+  type Array as YArray,
+  type Map as YMap,
+} from "yjs";
 import {
   loadPersistedRoomState,
   persistRoomState,
@@ -17,7 +23,7 @@ import {
 } from "@/lib/yjs/transport-protocol";
 import type { CollaborationStatus, PresenceState } from "@/types/collaboration";
 import type { SessionIdentity } from "@/types/metadata";
-import type { CellRecord } from "@/types/spreadsheet";
+import type { CellFormatRecord, CellRecord } from "@/types/spreadsheet";
 
 const ROOM_CHANNEL_PREFIX = "pebbles-room:";
 const REMOTE_AWARENESS_ORIGIN = "pebbles-remote-awareness";
@@ -49,10 +55,21 @@ type BroadcastMessage =
     };
 
 interface CollaborationSnapshot {
+  columnOrder: number[];
+  columnWidths: Map<number, number>;
+  formats: Map<string, CellFormatRecord>;
   lastRemoteLatencyMs: number | null;
   peers: PresenceState[];
+  rowHeights: Map<number, number>;
+  rowOrder: number[];
   status: CollaborationStatus;
   values: Map<string, CellRecord>;
+}
+
+function mapNumericEntries(values: YMap<number>) {
+  return new Map(
+    Array.from(values.entries()).map(([key, value]) => [Number(key), value])
+  );
 }
 
 function createChannelName(roomId: string) {
@@ -87,9 +104,14 @@ export class BroadcastCollaborationRoom {
   private readonly awareness: Awareness;
   private readonly cells: YMap<CellRecord>;
   private readonly channel: BroadcastChannel;
+  private readonly columnOrder: YArray<number>;
+  private readonly columnWidths: YMap<number>;
   private readonly doc: Doc;
+  private readonly formats: YMap<CellFormatRecord>;
   private readonly listeners = new Set<() => void>();
   private readonly roomId: string;
+  private readonly rowHeights: YMap<number>;
+  private readonly rowOrder: YArray<number>;
   private readonly senderId = nextSenderId();
   private readonly session: SessionIdentity;
   private isDestroyed = false;
@@ -113,6 +135,11 @@ export class BroadcastCollaborationRoom {
     this.session = args.session;
     this.doc = new Doc();
     this.cells = this.doc.getMap<CellRecord>("cells");
+    this.formats = this.doc.getMap<CellFormatRecord>("formats");
+    this.columnWidths = this.doc.getMap<number>("column-widths");
+    this.rowHeights = this.doc.getMap<number>("row-heights");
+    this.columnOrder = this.doc.getArray<number>("column-order");
+    this.rowOrder = this.doc.getArray<number>("row-order");
     this.awareness = new Awareness(this.doc);
     this.channel = new BroadcastChannel(createChannelName(args.roomId));
     this.snapshot = this.createSnapshot();
@@ -163,6 +190,83 @@ export class BroadcastCollaborationRoom {
   deleteCell(cellKey: string) {
     this.doc.transact(() => {
       this.cells.delete(cellKey);
+    }, this.senderId);
+  }
+
+  setCellFormat(cellKey: string, format: CellFormatRecord | null) {
+    this.doc.transact(() => {
+      if (format == null) {
+        this.formats.delete(cellKey);
+        return;
+      }
+
+      this.formats.set(cellKey, {
+        ...format,
+        updatedAt: Date.now(),
+        updatedBy: this.session.userId,
+      });
+    }, this.senderId);
+  }
+
+  batchFormat(
+    formats: Array<{
+      format: CellFormatRecord | null;
+      key: string;
+    }>
+  ) {
+    if (formats.length === 0) {
+      return;
+    }
+
+    this.doc.transact(() => {
+      for (const entry of formats) {
+        if (entry.format == null) {
+          this.formats.delete(entry.key);
+          continue;
+        }
+
+        this.formats.set(entry.key, {
+          ...entry.format,
+          updatedAt: Date.now(),
+          updatedBy: this.session.userId,
+        });
+      }
+    }, this.senderId);
+  }
+
+  setColumnWidth(column: number, width: number | null) {
+    this.doc.transact(() => {
+      if (width == null) {
+        this.columnWidths.delete(String(column));
+        return;
+      }
+
+      this.columnWidths.set(String(column), width);
+    }, this.senderId);
+  }
+
+  setRowHeight(row: number, height: number | null) {
+    this.doc.transact(() => {
+      if (height == null) {
+        this.rowHeights.delete(String(row));
+        return;
+      }
+
+      this.rowHeights.set(String(row), height);
+    }, this.senderId);
+  }
+
+  setColumnOrder(order: number[]) {
+    this.doc.transact(() => {
+      this.columnOrder.delete(0, this.columnOrder.length);
+      this.columnOrder.insert(0, order);
+    }, this.senderId);
+  }
+
+  setRowOrder(order: number[]) {
+    this.doc.transact(() => {
+      this.rowOrder.delete(0, this.rowOrder.length);
+      this.rowOrder.insert(0, order);
     }, this.senderId);
   }
 
@@ -447,8 +551,17 @@ export class BroadcastCollaborationRoom {
       .filter((state) => state.userId !== this.session.userId);
 
     return {
+      columnOrder: this.columnOrder.toArray(),
+      columnWidths: mapNumericEntries(this.columnWidths),
+      formats: new Map(
+        Array.from(this.formats.entries()).flatMap(([key, value]) =>
+          value ? [[key, value] as const] : []
+        )
+      ),
       lastRemoteLatencyMs: this.lastRemoteLatencyMs,
       peers,
+      rowHeights: mapNumericEntries(this.rowHeights),
+      rowOrder: this.rowOrder.toArray(),
       status: this.status,
       values: new Map(
         Array.from(this.cells.entries()).flatMap(([key, value]) =>

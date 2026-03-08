@@ -8,23 +8,50 @@ import {
   useSyncExternalStore,
 } from "react";
 import { createCellKey } from "@/features/spreadsheet/addressing";
-import { getSelectionBounds } from "@/features/spreadsheet/interaction";
 import {
   getOrCreateBroadcastCollaborationRoom,
   releaseBroadcastCollaborationRoom,
 } from "@/lib/yjs/broadcast-collaboration-room";
 import type { PresenceState } from "@/types/collaboration";
 import type { SessionIdentity } from "@/types/metadata";
-import type { CellRecord, Selection } from "@/types/spreadsheet";
+import type {
+  CellFormatRecord,
+  CellRecord,
+  Selection,
+} from "@/types/spreadsheet";
 
 interface CollaborationCellChange {
   key: string;
   value: CellRecord | null;
 }
 
+interface CollaborationFormatChange {
+  key: string;
+  value: CellFormatRecord | null;
+}
+
+interface CollaborationMetricChange {
+  index: number;
+  value: number | null;
+}
+
+export interface CollaborationSheetChangeSet {
+  cells: CollaborationCellChange[];
+  columnOrder?: number[];
+  columnWidths: CollaborationMetricChange[];
+  formats: CollaborationFormatChange[];
+  rowHeights: CollaborationMetricChange[];
+  rowOrder?: number[];
+}
+
 const EMPTY_SNAPSHOT = {
+  columnOrder: [] as number[],
+  columnWidths: new Map<number, number>(),
+  formats: new Map<string, CellFormatRecord>(),
   lastRemoteLatencyMs: null,
   peers: [] as PresenceState[],
+  rowHeights: new Map<number, number>(),
+  rowOrder: [] as number[],
   status: "idle" as const,
   values: new Map<string, CellRecord>(),
 };
@@ -49,8 +76,6 @@ function toPresenceState(
   session: SessionIdentity,
   selection: Selection
 ): PresenceState {
-  const bounds = getSelectionBounds(selection);
-
   return {
     activeCell: createCellKey(
       selection.type === "cell" ? selection.anchor : selection.end
@@ -61,23 +86,78 @@ function toPresenceState(
       selection.type === "cell"
         ? undefined
         : {
-            end: createCellKey(bounds.end),
-            start: createCellKey(bounds.start),
+            end: createCellKey(selection.end),
+            start: createCellKey(selection.start),
           },
     userId: session.userId,
   };
 }
 
-function areCellRecordsEqual(
-  left: CellRecord | undefined,
-  right: CellRecord | undefined
-) {
+function areCellRecordsEqual(left: unknown, right: unknown) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function areNumberArraysEqual(left: number[], right: number[]) {
   return (
-    left?.kind === right?.kind &&
-    left?.raw === right?.raw &&
-    left?.updatedAt === right?.updatedAt &&
-    left?.updatedBy === right?.updatedBy
+    left.length === right.length &&
+    left.every((value, index) => right[index] === value)
   );
+}
+
+function collectKeyedChanges<T>(args: {
+  next: Map<string, T>;
+  previous: Map<string, T>;
+}) {
+  const changes: Array<{ key: string; value: T | null }> = [];
+
+  for (const [key, value] of args.next) {
+    const previousValue = args.previous.get(key);
+
+    if (!areCellRecordsEqual(previousValue, value)) {
+      changes.push({
+        key,
+        value,
+      });
+    }
+  }
+
+  for (const key of args.previous.keys()) {
+    if (!args.next.has(key)) {
+      changes.push({
+        key,
+        value: null,
+      });
+    }
+  }
+
+  return changes;
+}
+
+function collectNumericMetricChanges(args: {
+  next: Map<number, number>;
+  previous: Map<number, number>;
+}) {
+  const changes: CollaborationMetricChange[] = [];
+
+  for (const [index, value] of args.next) {
+    if (args.previous.get(index) !== value) {
+      changes.push({
+        index,
+        value,
+      });
+    }
+  }
+
+  for (const index of args.previous.keys()) {
+    if (!args.next.has(index)) {
+      changes.push({
+        index,
+        value: null,
+      });
+    }
+  }
+
+  return changes;
 }
 
 export function useCollaborationRoom(args: {
@@ -85,7 +165,7 @@ export function useCollaborationRoom(args: {
     key: string;
     raw: string;
   }>;
-  onCellsChanged: (changes: CollaborationCellChange[]) => void;
+  onSheetChanged: (changes: CollaborationSheetChangeSet) => void;
   roomId: string;
   selection: Selection;
   session: SessionIdentity | null;
@@ -106,8 +186,13 @@ export function useCollaborationRoom(args: {
       session,
     });
   }, [args.roomId, sessionUserId]);
-  const handleCellChanges = useEffectEvent(args.onCellsChanged);
+  const handleSheetChanges = useEffectEvent(args.onSheetChanged);
   const previousValuesRef = useRef<Map<string, CellRecord>>(new Map());
+  const previousFormatsRef = useRef<Map<string, CellFormatRecord>>(new Map());
+  const previousColumnWidthsRef = useRef<Map<number, number>>(new Map());
+  const previousRowHeightsRef = useRef<Map<number, number>>(new Map());
+  const previousColumnOrderRef = useRef<number[]>([]);
+  const previousRowOrderRef = useRef<number[]>([]);
 
   const snapshot = useSyncExternalStore(
     (listener) => room?.subscribe(listener) ?? noopUnsubscribe,
@@ -120,12 +205,22 @@ export function useCollaborationRoom(args: {
   useEffect(() => {
     if (!room) {
       previousValuesRef.current = new Map();
+      previousFormatsRef.current = new Map();
+      previousColumnWidthsRef.current = new Map();
+      previousRowHeightsRef.current = new Map();
+      previousColumnOrderRef.current = [];
+      previousRowOrderRef.current = [];
       hasSeedRef.current = false;
       return;
     }
 
     return () => {
       previousValuesRef.current = new Map();
+      previousFormatsRef.current = new Map();
+      previousColumnWidthsRef.current = new Map();
+      previousRowHeightsRef.current = new Map();
+      previousColumnOrderRef.current = [];
+      previousRowOrderRef.current = [];
       hasSeedRef.current = false;
       releaseBroadcastCollaborationRoom(args.roomId);
     };
@@ -149,36 +244,64 @@ export function useCollaborationRoom(args: {
   }, [args.initialCells, room, snapshot.status, snapshot.values.size]);
 
   useEffect(() => {
-    const changes: CollaborationCellChange[] = [];
-    const previousValues = previousValuesRef.current;
-    const nextValues = snapshot.values;
+    const cells = collectKeyedChanges({
+      next: snapshot.values,
+      previous: previousValuesRef.current,
+    });
+    const formats = collectKeyedChanges({
+      next: snapshot.formats,
+      previous: previousFormatsRef.current,
+    });
+    const columnWidths = collectNumericMetricChanges({
+      next: snapshot.columnWidths,
+      previous: previousColumnWidthsRef.current,
+    });
+    const rowHeights = collectNumericMetricChanges({
+      next: snapshot.rowHeights,
+      previous: previousRowHeightsRef.current,
+    });
 
-    for (const [key, value] of nextValues) {
-      const previousValue = previousValues.get(key);
+    const didColumnOrderChange = !areNumberArraysEqual(
+      previousColumnOrderRef.current,
+      snapshot.columnOrder
+    );
+    const didRowOrderChange = !areNumberArraysEqual(
+      previousRowOrderRef.current,
+      snapshot.rowOrder
+    );
 
-      if (!areCellRecordsEqual(previousValue, value)) {
-        changes.push({
-          key,
-          value,
-        });
-      }
+    previousValuesRef.current = new Map(snapshot.values);
+    previousFormatsRef.current = new Map(snapshot.formats);
+    previousColumnWidthsRef.current = new Map(snapshot.columnWidths);
+    previousRowHeightsRef.current = new Map(snapshot.rowHeights);
+    previousColumnOrderRef.current = [...snapshot.columnOrder];
+    previousRowOrderRef.current = [...snapshot.rowOrder];
+
+    if (
+      cells.length > 0 ||
+      formats.length > 0 ||
+      columnWidths.length > 0 ||
+      rowHeights.length > 0 ||
+      didColumnOrderChange ||
+      didRowOrderChange
+    ) {
+      handleSheetChanges({
+        cells,
+        columnOrder: didColumnOrderChange ? snapshot.columnOrder : undefined,
+        columnWidths,
+        formats,
+        rowHeights,
+        rowOrder: didRowOrderChange ? snapshot.rowOrder : undefined,
+      });
     }
-
-    for (const key of previousValues.keys()) {
-      if (!nextValues.has(key)) {
-        changes.push({
-          key,
-          value: null,
-        });
-      }
-    }
-
-    previousValuesRef.current = new Map(nextValues);
-
-    if (changes.length > 0) {
-      handleCellChanges(changes);
-    }
-  }, [snapshot.values]);
+  }, [
+    snapshot.columnOrder,
+    snapshot.columnWidths,
+    snapshot.formats,
+    snapshot.rowHeights,
+    snapshot.rowOrder,
+    snapshot.values,
+  ]);
 
   useEffect(() => {
     if (!(room && args.session)) {
@@ -189,6 +312,14 @@ export function useCollaborationRoom(args: {
   }, [args.selection, args.session, room]);
 
   return {
+    batchFormat: (
+      formats: Array<{
+        format: CellFormatRecord | null;
+        key: string;
+      }>
+    ) => {
+      room?.batchFormat(formats);
+    },
     batchUpsert: (
       cells: Array<{
         key: string;
@@ -199,6 +330,24 @@ export function useCollaborationRoom(args: {
     },
     lastRemoteLatencyMs: snapshot.lastRemoteLatencyMs,
     peers: snapshot.peers,
+    setCellFormat: (entry: {
+      format: CellFormatRecord | null;
+      key: string;
+    }) => {
+      room?.setCellFormat(entry.key, entry.format);
+    },
+    setColumnOrder: (order: number[]) => {
+      room?.setColumnOrder(order);
+    },
+    setColumnWidth: (column: number, width: number | null) => {
+      room?.setColumnWidth(column, width);
+    },
+    setRowHeight: (row: number, height: number | null) => {
+      room?.setRowHeight(row, height);
+    },
+    setRowOrder: (order: number[]) => {
+      room?.setRowOrder(order);
+    },
     status: snapshot.status,
     upsertCell: (cell: { key: string; raw: string }) => {
       if (!room) {
