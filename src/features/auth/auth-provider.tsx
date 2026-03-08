@@ -127,7 +127,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
           displayName: nextSession.displayName,
           email: user.email ?? undefined,
           id: nextSession.userId,
-        });
+        }).catch(() => undefined);
       } else {
         const guestSession = readGuestSession();
         setSession(guestSession);
@@ -166,7 +166,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
       color: nextSession.color,
       displayName: nextSession.displayName,
       id: nextSession.userId,
-    });
+    }).catch(() => undefined);
   }
 
   async function signOut() {

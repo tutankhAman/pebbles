@@ -3,43 +3,10 @@
 import { isInstantConfigured } from "@/lib/instantdb/client";
 import type { DocumentMeta, SessionIdentity, UserMeta } from "@/types/metadata";
 
-const DOCUMENTS_STORAGE_KEY = "pebbles:documents";
-const USERS_STORAGE_KEY = "pebbles:users";
+const METADATA_POLL_INTERVAL_MS = 2000;
 
 interface DocumentDraft {
   title?: string;
-}
-
-function canUseStorage() {
-  return (
-    typeof window !== "undefined" && typeof window.localStorage !== "undefined"
-  );
-}
-
-function readCollection<T>(storageKey: string) {
-  if (!canUseStorage()) {
-    return [];
-  }
-
-  const rawValue = window.localStorage.getItem(storageKey);
-
-  if (!rawValue) {
-    return [];
-  }
-
-  try {
-    return JSON.parse(rawValue) as T[];
-  } catch {
-    return [];
-  }
-}
-
-function writeCollection<T>(storageKey: string, records: T[]) {
-  if (!canUseStorage()) {
-    return;
-  }
-
-  window.localStorage.setItem(storageKey, JSON.stringify(records));
 }
 
 function notifyMetadataChanged() {
@@ -50,96 +17,103 @@ function notifyMetadataChanged() {
   window.dispatchEvent(new CustomEvent("pebbles:metadata-changed"));
 }
 
-function createDocumentTitle() {
-  const stamp = new Intl.DateTimeFormat("en", {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date());
+async function parseJsonResponse<T>(response: Response) {
+  if (!response.ok) {
+    throw new Error(`Metadata request failed: ${response.status}`);
+  }
 
-  return `Untitled sheet ${stamp}`;
+  return (await response.json()) as T;
+}
+
+async function requestMetadata<T>(input: RequestInfo, init?: RequestInit) {
+  const response = await fetch(input, {
+    cache: "no-store",
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...init?.headers,
+    },
+  });
+
+  return parseJsonResponse<T>(response);
 }
 
 export function getMetadataDriverLabel() {
   return isInstantConfigured()
-    ? "local-fallback (instant configured)"
-    : "local-fallback";
+    ? "shared-file-api (instant configured)"
+    : "shared-file-api";
 }
 
 export function listDocuments() {
-  const documents = readCollection<DocumentMeta>(DOCUMENTS_STORAGE_KEY);
-  return documents.toSorted(
-    (left, right) => right.lastModifiedAt - left.lastModifiedAt
-  );
+  return requestMetadata<DocumentMeta[]>("/api/metadata/documents");
 }
 
-export function getDocumentById(documentId: string) {
-  const documents = listDocuments();
-  return documents.find((document) => document.id === documentId) ?? null;
+export async function getDocumentById(documentId: string) {
+  const response = await fetch(`/api/metadata/documents/${documentId}`, {
+    cache: "no-store",
+  });
+
+  if (response.status === 404) {
+    return null;
+  }
+
+  return parseJsonResponse<DocumentMeta>(response);
 }
 
-export function createDocument(
+export async function createDocument(
   owner: SessionIdentity,
   draft: DocumentDraft = {}
 ) {
-  const now = Date.now();
-  const document: DocumentMeta = {
-    createdAt: now,
-    id: crypto.randomUUID(),
-    lastModifiedAt: now,
-    ownerId: owner.userId,
-    ownerName: owner.displayName,
-    roomId: crypto.randomUUID(),
-    title: draft.title?.trim() || createDocumentTitle(),
-  };
+  const document = await requestMetadata<DocumentMeta>(
+    "/api/metadata/documents",
+    {
+      body: JSON.stringify({
+        draft,
+        owner,
+      }),
+      method: "POST",
+    }
+  );
 
-  const documents = listDocuments();
-  writeCollection(DOCUMENTS_STORAGE_KEY, [document, ...documents]);
-  upsertUserMeta({
-    color: owner.color,
-    displayName: owner.displayName,
-    id: owner.userId,
-  });
   notifyMetadataChanged();
   return document;
 }
 
-export function renameDocument(documentId: string, title: string) {
-  const documents = listDocuments();
-  const nextDocuments = documents.map((document) =>
-    document.id === documentId
-      ? {
-          ...document,
-          lastModifiedAt: Date.now(),
-          title: title.trim() || document.title,
-        }
-      : document
+export async function renameDocument(documentId: string, title: string) {
+  const document = await requestMetadata<DocumentMeta>(
+    `/api/metadata/documents/${documentId}`,
+    {
+      body: JSON.stringify({
+        title,
+      }),
+      method: "PATCH",
+    }
   );
 
-  writeCollection(DOCUMENTS_STORAGE_KEY, nextDocuments);
   notifyMetadataChanged();
-  return nextDocuments.find((document) => document.id === documentId) ?? null;
+  return document;
 }
 
-export function touchDocument(documentId: string) {
-  const documents = listDocuments();
-  const nextDocuments = documents.map((document) =>
-    document.id === documentId
-      ? {
-          ...document,
-          lastModifiedAt: Date.now(),
-        }
-      : document
+export async function touchDocument(documentId: string) {
+  const document = await requestMetadata<DocumentMeta>(
+    `/api/metadata/documents/${documentId}`,
+    {
+      body: JSON.stringify({
+        touch: true,
+      }),
+      method: "PATCH",
+    }
   );
 
-  writeCollection(DOCUMENTS_STORAGE_KEY, nextDocuments);
   notifyMetadataChanged();
-  return nextDocuments.find((document) => document.id === documentId) ?? null;
+  return document;
 }
 
-export function upsertUserMeta(user: UserMeta) {
-  const users = readCollection<UserMeta>(USERS_STORAGE_KEY);
-  const withoutCurrent = users.filter((entry) => entry.id !== user.id);
-  writeCollection(USERS_STORAGE_KEY, [...withoutCurrent, user]);
+export async function upsertUserMeta(user: UserMeta) {
+  await requestMetadata<{ ok: true }>("/api/metadata/users", {
+    body: JSON.stringify(user),
+    method: "POST",
+  });
 }
 
 export function subscribeToMetadataChanges(callback: () => void) {
@@ -147,25 +121,17 @@ export function subscribeToMetadataChanges(callback: () => void) {
     return () => undefined;
   }
 
-  const handleStorage = (event: StorageEvent) => {
-    if (
-      event.key === DOCUMENTS_STORAGE_KEY ||
-      event.key === USERS_STORAGE_KEY ||
-      event.key === null
-    ) {
-      callback();
-    }
-  };
-
+  const intervalId = window.setInterval(() => {
+    callback();
+  }, METADATA_POLL_INTERVAL_MS);
   const handleCustomEvent = () => {
     callback();
   };
 
-  window.addEventListener("storage", handleStorage);
   window.addEventListener("pebbles:metadata-changed", handleCustomEvent);
 
   return () => {
-    window.removeEventListener("storage", handleStorage);
+    window.clearInterval(intervalId);
     window.removeEventListener("pebbles:metadata-changed", handleCustomEvent);
   };
 }

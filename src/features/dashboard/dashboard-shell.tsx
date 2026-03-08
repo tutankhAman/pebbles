@@ -118,7 +118,7 @@ export function DashboardShell() {
     useAuth();
   const [documents, setDocuments] = useState<DocumentMeta[]>([]);
   const [documentTitle, setDocumentTitle] = useState("");
-  const [isCreatingDocument, startCreateTransition] = useTransition();
+  const [isCreatingDocument, setIsCreatingDocument] = useState(false);
 
   useEffect(() => {
     if (!session) {
@@ -126,15 +126,29 @@ export function DashboardShell() {
       return;
     }
 
-    const loadDocuments = () => {
-      const nextDocuments = listDocuments();
-      setDocuments(nextDocuments);
+    let ignore = false;
+
+    const loadDocuments = async () => {
+      const nextDocuments = await listDocuments();
+
+      if (!ignore) {
+        setDocuments(nextDocuments);
+      }
     };
 
-    loadDocuments();
-    return subscribeToMetadataChanges(() => {
-      loadDocuments();
+    loadDocuments().catch(() => {
+      if (!ignore) {
+        setDocuments([]);
+      }
     });
+    const unsubscribe = subscribeToMetadataChanges(() => {
+      loadDocuments().catch(() => undefined);
+    });
+
+    return () => {
+      ignore = true;
+      unsubscribe();
+    };
   }, [session]);
 
   const identityLabel = useMemo(() => {
@@ -267,13 +281,18 @@ export function DashboardShell() {
                     className="inline-flex items-center justify-center rounded-full bg-[var(--foreground)] px-5 py-3 font-medium text-[var(--background)] disabled:cursor-not-allowed disabled:opacity-60"
                     disabled={isCreatingDocument}
                     onClick={() => {
-                      startCreateTransition(() => {
-                        const document = createDocument(session, {
-                          title: documentTitle,
+                      setIsCreatingDocument(true);
+                      createDocument(session, {
+                        title: documentTitle,
+                      })
+                        .then((document) => {
+                          setDocumentTitle("");
+                          router.push(`/documents/${document.id}`);
+                        })
+                        .catch(() => undefined)
+                        .finally(() => {
+                          setIsCreatingDocument(false);
                         });
-                        setDocumentTitle("");
-                        router.push(`/documents/${document.id}`);
-                      });
                     }}
                     type="button"
                   >

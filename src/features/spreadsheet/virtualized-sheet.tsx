@@ -412,6 +412,9 @@ export function VirtualizedSheet({
   });
   const activeCellRecord = sheet.getCell(activeCell);
   const activeCellRaw = getCellDisplayValue(activeCellRecord);
+  const syncDocumentTimestamp = () => {
+    touchDocument(document.id).catch(() => undefined);
+  };
 
   const setNextWriteState = (nextWriteState: WriteState) => {
     writeStateRef.current = nextWriteState;
@@ -485,7 +488,7 @@ export function VirtualizedSheet({
       raw: value,
     });
     scheduleWriteConfirmation();
-    touchDocument(document.id);
+    syncDocumentTimestamp();
   };
 
   const clearSelectionContents = () => {
@@ -520,7 +523,7 @@ export function VirtualizedSheet({
 
     syncBatchUpsert(clearedKeys);
     scheduleWriteConfirmation();
-    touchDocument(document.id);
+    syncDocumentTimestamp();
   };
 
   const startEditing = (
@@ -800,7 +803,7 @@ export function VirtualizedSheet({
       )
     );
     scheduleWriteConfirmation();
-    touchDocument(document.id);
+    syncDocumentTimestamp();
 
     const rowCount = matrix.length;
     const colCount = Math.max(...matrix.map((row) => row.length), 1);

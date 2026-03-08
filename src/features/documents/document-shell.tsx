@@ -39,8 +39,8 @@ export function DocumentShell({ documentId }: { documentId: string }) {
   useEffect(() => {
     let isCancelled = false;
 
-    const loadDocument = () => {
-      const nextDocument = getDocumentById(documentId);
+    const loadDocument = async () => {
+      const nextDocument = await getDocumentById(documentId);
 
       if (!isCancelled) {
         setDocument(nextDocument);
@@ -48,7 +48,12 @@ export function DocumentShell({ documentId }: { documentId: string }) {
       }
     };
 
-    loadDocument();
+    loadDocument().catch(() => {
+      if (!isCancelled) {
+        setDocument(null);
+        setIsLoading(false);
+      }
+    });
 
     return () => {
       isCancelled = true;
