@@ -90,6 +90,7 @@ function getSelectedCellLabel(collaborator: CollaboratorSummary) {
 }
 
 function createCollaboratorList(args: CollaboratorBarProps) {
+  const collaboratorIds = new Set<string>();
   const collaborators: CollaboratorSummary[] = args.session
     ? [
         {
@@ -102,7 +103,20 @@ function createCollaboratorList(args: CollaboratorBarProps) {
       ]
     : [];
 
+  if (args.session) {
+    collaboratorIds.add(args.session.userId);
+  }
+
   for (const peer of args.collaboration.peers) {
+    if (
+      peer.userId.trim() === "" ||
+      peer.displayName.trim() === "" ||
+      collaboratorIds.has(peer.userId)
+    ) {
+      continue;
+    }
+
+    collaboratorIds.add(peer.userId);
     collaborators.push({
       activeCell: peer.activeCell ?? null,
       color: peer.color,
@@ -204,7 +218,7 @@ export function CollaboratorBar({
                   aria-expanded={isOpen}
                   aria-haspopup="dialog"
                   aria-label={`View collaborator details for ${collaborator.displayName}`}
-                  className={`relative flex h-8 w-8 items-center justify-center overflow-hidden border bg-white shadow-[0_1px_2px_rgba(60,64,67,0.16)] transition-transform hover:z-10 hover:-translate-y-[1px] focus-visible:z-10 focus-visible:-translate-y-[1px] focus-visible:outline-none ${
+                  className={`relative flex h-6 w-6 items-center justify-center overflow-hidden rounded-full border bg-white shadow-[0_1px_2px_rgba(60,64,67,0.16)] transition-transform hover:z-10 hover:-translate-y-px focus-visible:z-10 focus-visible:-translate-y-px focus-visible:outline-none ${
                     isOpen ? "z-20 scale-[1.04]" : "z-0"
                   }`}
                   onClick={() => {
@@ -225,12 +239,12 @@ export function CollaboratorBar({
                   <Image
                     alt={`${collaborator.displayName} avatar`}
                     className="h-full w-full object-cover"
-                    height={32}
+                    height={24}
                     src={createAvatarDataUri(
                       `${collaborator.userId}:${collaborator.displayName}`
                     )}
                     unoptimized
-                    width={32}
+                    width={24}
                   />
                 </button>
 
