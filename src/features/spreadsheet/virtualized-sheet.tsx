@@ -37,11 +37,7 @@ import {
   downloadExport,
   sanitizeFileName,
 } from "@/features/spreadsheet/functions/virtualized-sheet-file";
-import {
-  findCellMatches,
-  type SearchMatch,
-  sortRowsByColumn,
-} from "@/features/spreadsheet/functions/virtualized-sheet-search";
+import { sortRowsByColumn } from "@/features/spreadsheet/functions/virtualized-sheet-search";
 import {
   handleFormatAndInsertShortcuts,
   handleInsertShortcuts,
@@ -50,18 +46,19 @@ import {
   handleViewShortcuts,
   type ShortcutHandlerArgs,
 } from "@/features/spreadsheet/functions/virtualized-sheet-shortcuts";
-import { getHeaderBackgroundColor } from "@/features/spreadsheet/functions/virtualized-sheet-styles";
 import {
   applyRemoteChanges,
-  commitHeaderDrag,
   getSnapshotChanges,
   hasSnapshotChanges,
 } from "@/features/spreadsheet/functions/virtualized-sheet-sync";
+import { useHeaderDrag } from "@/features/spreadsheet/hooks/use-header-drag";
+import { useSheetSearch } from "@/features/spreadsheet/hooks/use-sheet-search";
 import {
   DEFAULT_VIEWPORT_HEIGHT,
   DEFAULT_VIEWPORT_WIDTH,
   useVirtualViewport,
 } from "@/features/spreadsheet/hooks/use-virtual-viewport";
+import { useWriteState } from "@/features/spreadsheet/hooks/use-write-state";
 import {
   createCellSelection,
   createRangeSelection,
@@ -70,31 +67,33 @@ import {
   getSelectionDimensionsForLayout,
   getSelectionMembers,
   getSelectionRect,
-  getWriteStateAfterEvent,
   moveCellAddressInLayout,
   parseClipboardMatrix,
   serializeSelectionMatrix,
 } from "@/features/spreadsheet/interaction";
 import {
-  clampColumnWidth,
-  clampRowHeight,
   createAxisLayouts,
-  getAxisLayoutByLogicalIndex,
   getAxisVisibleSlice,
 } from "@/features/spreadsheet/sheet-layout";
 import { SparseSheet } from "@/features/spreadsheet/sparse-sheet";
 import type {
   EditorSurface,
-  HeaderDragState,
   HelpPanel,
   HistoryState,
   KeyedChange,
   MenuKey,
   SnapshotChanges,
 } from "@/features/spreadsheet/types/virtualized-sheet";
+import { CellEditor } from "@/features/spreadsheet/ui/cell-editor";
+import { ColumnHeaders } from "@/features/spreadsheet/ui/column-headers";
+import { DragReorderIndicator } from "@/features/spreadsheet/ui/drag-reorder-indicator";
+import { FormulaBar } from "@/features/spreadsheet/ui/formula-bar";
+import { FrozenCells } from "@/features/spreadsheet/ui/frozen-cells";
 import { HelpPanelDialog } from "@/features/spreadsheet/ui/help-panel-dialog";
 import { RenameSheetDialog } from "@/features/spreadsheet/ui/rename-sheet-dialog";
+import { RowHeaders } from "@/features/spreadsheet/ui/row-headers";
 import { SearchPanel } from "@/features/spreadsheet/ui/search-panel";
+import { SelectionOverlay } from "@/features/spreadsheet/ui/selection-overlay";
 import { SheetMenuBar } from "@/features/spreadsheet/ui/sheet-menu-bar";
 import { SheetToolbar } from "@/features/spreadsheet/ui/sheet-toolbar";
 import { VirtualCell } from "@/features/spreadsheet/ui/virtual-cell";
@@ -102,7 +101,6 @@ import {
   DEFAULT_SHEET_METRICS,
   getCellAddressFromPoint,
   getCellLayout,
-  getColumnHeaderLabel,
   getGridDimensions,
 } from "@/features/spreadsheet/viewport";
 import { renameDocument, touchDocument } from "@/lib/metadata/metadata-store";
@@ -123,9 +121,7 @@ const DEFAULT_SELECTION: CellAddress = {
   row: 1,
 };
 const LIVE_EDIT_SYNC_DELAY_MS = 90;
-const RECONNECT_SETTLE_DELAY_MS = 220;
-const WRITE_CONFIRMATION_DELAY_MS = 180;
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the editor composes menu actions, virtualization, and collaboration in one client boundary.
+
 export function VirtualizedSheet({
   document,
   onCollaborationSnapshotChange,
@@ -142,6 +138,8 @@ export function VirtualizedSheet({
   session: SessionIdentity | null;
 }) {
   const router = useRouter();
+
+  // ── Refs ───────────────────────────────────────────────────────────────
   const sheetRef = useRef<SparseSheet | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const formulaBarRef = useRef<HTMLInputElement | null>(null);
@@ -155,14 +153,11 @@ export function VirtualizedSheet({
   const pointerAnchorRef = useRef<CellAddress | null>(null);
   const clipboardTextRef = useRef("");
   const isPointerSelectingRef = useRef(false);
-  const commitTimerRef = useRef<number | null>(null);
   const liveEditSyncTimerRef = useRef<number | null>(null);
   const pendingLiveEditSyncRef = useRef<{
     address: CellAddress;
     raw: string;
   } | null>(null);
-  const reconnectTimerRef = useRef<number | null>(null);
-  const writeStateRef = useRef<WriteState>("idle");
   const historyRef = useRef<{
     future: HistoryState[];
     past: HistoryState[];
@@ -170,6 +165,8 @@ export function VirtualizedSheet({
     future: [],
     past: [],
   });
+
+  // ── Core state ─────────────────────────────────────────────────────────
   const [cellRevision, setCellRevision] = useState(0);
   const [selection, setSelection] = useState<Selection>(() =>
     createCellSelection(DEFAULT_SELECTION)
@@ -182,9 +179,6 @@ export function VirtualizedSheet({
     null
   );
   const [draftValue, setDraftValue] = useState("");
-  const [writeState, setWriteState] = useState<WriteState>("idle");
-  const [headerDragState, setHeaderDragState] =
-    useState<HeaderDragState | null>(null);
   const [activeMenu, setActiveMenu] = useState<MenuKey | null>(null);
   const [activeHelpPanel, setActiveHelpPanel] = useState<HelpPanel | null>(
     null
@@ -194,13 +188,10 @@ export function VirtualizedSheet({
   const [showCrosshairHighlight, setShowCrosshairHighlight] = useState(true);
   const [freezeTopRow, setFreezeTopRow] = useState(false);
   const [freezeFirstColumn, setFreezeFirstColumn] = useState(false);
-  const [isSearchPanelOpen, setIsSearchPanelOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [replaceValue, setReplaceValue] = useState("");
-  const [isSearchCaseSensitive, setIsSearchCaseSensitive] = useState(false);
   const [isRenameDialogOpen, setIsRenameDialogOpen] = useState(false);
   const [renameDraft, setRenameDraft] = useState(document.title);
 
+  // ── Sheet model ────────────────────────────────────────────────────────
   if (sheetRef.current === null) {
     sheetRef.current = new SparseSheet();
   }
@@ -210,7 +201,16 @@ export function VirtualizedSheet({
     captureLayoutState(sheet)
   );
   const bounds = sheet.bounds;
+
+  // ── Viewport ───────────────────────────────────────────────────────────
   const { handleScroll, scrollRef, viewport } = useVirtualViewport();
+
+  // ── Write state ────────────────────────────────────────────────────────
+  const { scheduleWriteConfirmation, writeState } = useWriteState({
+    onWriteStateChange,
+  });
+
+  // ── Derived cell state ─────────────────────────────────────────────────
   const activeCell =
     selection.type === "cell" ? selection.anchor : selection.end;
   const activeCellKey = createCellKey(activeCell);
@@ -221,6 +221,8 @@ export function VirtualizedSheet({
   const activeFontSize = activeCellFormat?.fontSize
     ? String(activeCellFormat.fontSize)
     : "";
+
+  // ── Layout computation ─────────────────────────────────────────────────
   const { columnLayout, rowLayout } = useMemo(
     () =>
       createAxisLayouts(
@@ -259,6 +261,8 @@ export function VirtualizedSheet({
   );
   const visibleColumns = visibleColumnsSlice.items;
   const visibleRows = visibleRowsSlice.items;
+
+  // ── Cell snapshots ─────────────────────────────────────────────────────
   const cellsSnapshot = useMemo(() => {
     if (cellRevision < 0) {
       return new Map();
@@ -266,6 +270,8 @@ export function VirtualizedSheet({
 
     return sheet.getCells();
   }, [cellRevision, sheet]);
+
+  // ── Selection derived data ─────────────────────────────────────────────
   const selectionMembers = useMemo(
     () => getSelectionMembers(selection, columnLayout, rowLayout),
     [columnLayout, rowLayout, selection]
@@ -289,6 +295,7 @@ export function VirtualizedSheet({
   );
   const isFullRowSelection = selectedColumnSet.size === bounds.colCount;
   const isFullColumnSelection = selectedRowSet.size === bounds.rowCount;
+
   const populatedRows = useMemo(() => {
     const usedRows = new Set<number>();
 
@@ -298,21 +305,8 @@ export function VirtualizedSheet({
 
     return sheet.getRowOrder().filter((row) => usedRows.has(row));
   }, [cellsSnapshot, sheet]);
-  const searchMatches = useMemo(
-    () =>
-      isSearchPanelOpen
-        ? findCellMatches({
-            caseSensitive: isSearchCaseSensitive,
-            cells: cellsSnapshot,
-            query: searchQuery,
-          })
-        : ([] as SearchMatch[]),
-    [cellsSnapshot, isSearchCaseSensitive, isSearchPanelOpen, searchQuery]
-  );
-  const activeSearchMatchIndex = useMemo(
-    () => searchMatches.findIndex((match) => match.key === activeCellKey),
-    [activeCellKey, searchMatches]
-  );
+
+  // ── Formula engine ─────────────────────────────────────────────────────
   const seededSheetSnapshot = useMemo(() => createSeededSheet().snapshot(), []);
   const initialSeedCells = useMemo(
     () =>
@@ -357,6 +351,8 @@ export function VirtualizedSheet({
     format: activeCellFormat,
     formulaError: activeFormulaError,
   });
+
+  // ── Helpers ────────────────────────────────────────────────────────────
   const syncDocumentTimestamp = () => {
     touchDocument(document.id).catch(() => undefined);
   };
@@ -370,6 +366,8 @@ export function VirtualizedSheet({
       setLayoutState(captureLayoutState(sheetRef.current as SparseSheet));
     });
   };
+
+  // ── Collaboration ──────────────────────────────────────────────────────
   const handleCollaborativeSheetChanges = useEffectEvent(
     (changes: CollaborationSheetChangeSet) => {
       const sheetModel = sheetRef.current;
@@ -421,16 +419,76 @@ export function VirtualizedSheet({
     status,
   ]);
 
-  const closeMenus = () => {
-    setActiveMenu(null);
+  // ── Header drag ────────────────────────────────────────────────────────
+  const { headerDragState, setHeaderDragState } = useHeaderDrag({
+    bounds,
+    columnLayout,
+    markLayoutDirty: setLayoutRevisionWithTransition,
+    rowLayout,
+    scheduleWriteConfirmation,
+    scrollRef,
+    setColumnOrder,
+    setColumnWidth,
+    setRowHeight,
+    setRowOrder,
+    sheet,
+    syncDocumentTimestamp,
+  });
+
+  // ── Selection helpers ──────────────────────────────────────────────────
+  const ensureCellVisible = (address: CellAddress) => {
+    const node = scrollRef.current;
+
+    if (!node) {
+      return;
+    }
+
+    const layout = getCellLayout(address, columnLayout, rowLayout);
+    const cellRight = layout.left + layout.width;
+    const cellBottom = layout.top + layout.height;
+
+    if (layout.left < node.scrollLeft) {
+      node.scrollLeft = layout.left;
+    } else if (cellRight > node.scrollLeft + node.clientWidth) {
+      node.scrollLeft = cellRight - node.clientWidth;
+    }
+
+    if (layout.top < node.scrollTop) {
+      node.scrollTop = layout.top;
+    } else if (cellBottom > node.scrollTop + node.clientHeight) {
+      node.scrollTop = cellBottom - node.clientHeight;
+    }
   };
-  const openSearchPanel = () => {
-    setIsSearchPanelOpen(true);
-    closeMenus();
+
+  const applySelection = (
+    nextSelection: Selection,
+    visibleAddress?: CellAddress
+  ) => {
+    setSelection(nextSelection);
+    ensureCellVisible(
+      visibleAddress ??
+        (nextSelection.type === "cell"
+          ? nextSelection.anchor
+          : nextSelection.end)
+    );
   };
-  const closeSearchPanel = () => {
-    setIsSearchPanelOpen(false);
+  const selectColumn = (column: number) => {
+    applySelection(
+      createRangeSelection(
+        { col: column, row: 1 },
+        { col: column, row: bounds.rowCount }
+      ),
+      { col: column, row: activeCell.row }
+    );
   };
+  const selectRow = (row: number) => {
+    applySelection(
+      createRangeSelection({ col: 1, row }, { col: bounds.colCount, row }),
+      { col: activeCell.col, row }
+    );
+  };
+
+  // ── History ────────────────────────────────────────────────────────────
   const pushHistoryState = (entry: HistoryState) => {
     const nextPast = [...historyRef.current.past, entry].slice(-40);
 
@@ -459,37 +517,8 @@ export function VirtualizedSheet({
       pushHistoryState(beforeState);
     }
   };
-  const commitTrackedSheetMutation = (args: {
-    mutation: () => void;
-    nextSelection?: Selection;
-  }) => {
-    const beforeState: HistoryState = {
-      selection,
-      snapshot: sheet.snapshot(),
-    };
 
-    args.mutation();
-
-    const afterSnapshot = sheet.snapshot();
-    const changes = getSnapshotChanges(beforeState.snapshot, afterSnapshot);
-
-    if (!hasSnapshotChanges(changes, beforeState.snapshot, afterSnapshot)) {
-      if (args.nextSelection) {
-        applySelection(args.nextSelection);
-      }
-
-      return;
-    }
-
-    pushHistoryState(beforeState);
-    syncSnapshotChanges(changes, afterSnapshot);
-    setCellRevisionWithTransition();
-    setLayoutRevisionWithTransition();
-
-    if (args.nextSelection) {
-      applySelection(args.nextSelection);
-    }
-  };
+  // ── Snapshot sync ──────────────────────────────────────────────────────
   const syncCellSnapshotChanges = (cellChanges: KeyedChange<CellRecord>[]) => {
     const nextCellWrites = cellChanges.map((change) => ({
       key: change.key,
@@ -589,7 +618,39 @@ export function VirtualizedSheet({
     setLayoutRevisionWithTransition();
     applySelection(historyState.selection);
   };
+  const commitTrackedSheetMutation = (mutationArgs: {
+    mutation: () => void;
+    nextSelection?: Selection;
+  }) => {
+    const beforeState: HistoryState = {
+      selection,
+      snapshot: sheet.snapshot(),
+    };
 
+    mutationArgs.mutation();
+
+    const afterSnapshot = sheet.snapshot();
+    const changes = getSnapshotChanges(beforeState.snapshot, afterSnapshot);
+
+    if (!hasSnapshotChanges(changes, beforeState.snapshot, afterSnapshot)) {
+      if (mutationArgs.nextSelection) {
+        applySelection(mutationArgs.nextSelection);
+      }
+
+      return;
+    }
+
+    pushHistoryState(beforeState);
+    syncSnapshotChanges(changes, afterSnapshot);
+    setCellRevisionWithTransition();
+    setLayoutRevisionWithTransition();
+
+    if (mutationArgs.nextSelection) {
+      applySelection(mutationArgs.nextSelection);
+    }
+  };
+
+  // ── Cell write helpers ─────────────────────────────────────────────────
   const applyOptimisticCellWrite = (
     address: CellAddress,
     raw: string,
@@ -665,6 +726,7 @@ export function VirtualizedSheet({
     }
   };
 
+  // ── Formatting ─────────────────────────────────────────────────────────
   const applyFormattingPatch = (patch: CellFormat) => {
     runTrackedMutation(() => {
       const formatChanges = selectionMembers.rows.flatMap((row) =>
@@ -690,142 +752,7 @@ export function VirtualizedSheet({
     });
   };
 
-  const applyColumnWidth = (column: number, width: number, sync = false) => {
-    const nextWidth = clampColumnWidth(width);
-    sheet.setColumnWidth(column, nextWidth);
-    setLayoutRevisionWithTransition();
-
-    if (sync) {
-      setColumnWidth(column, nextWidth);
-      scheduleWriteConfirmation();
-      syncDocumentTimestamp();
-    }
-  };
-
-  const applyRowHeight = (row: number, height: number, sync = false) => {
-    const nextHeight = clampRowHeight(height);
-    sheet.setRowHeight(row, nextHeight);
-    setLayoutRevisionWithTransition();
-
-    if (sync) {
-      setRowHeight(row, nextHeight);
-      scheduleWriteConfirmation();
-      syncDocumentTimestamp();
-    }
-  };
-
-  const applyColumnOrder = (order: number[], sync = false) => {
-    sheet.setColumnOrder(order);
-    setLayoutRevisionWithTransition();
-
-    if (sync) {
-      setColumnOrder(order);
-      scheduleWriteConfirmation();
-      syncDocumentTimestamp();
-    }
-  };
-
-  const applyRowOrder = (order: number[], sync = false) => {
-    sheet.setRowOrder(order);
-    setLayoutRevisionWithTransition();
-
-    if (sync) {
-      setRowOrder(order);
-      scheduleWriteConfirmation();
-      syncDocumentTimestamp();
-    }
-  };
-
-  const setNextWriteState = (nextWriteState: WriteState) => {
-    writeStateRef.current = nextWriteState;
-    setWriteState(nextWriteState);
-    onWriteStateChange?.(nextWriteState);
-  };
-
-  const emitWriteEvent = (
-    event:
-      | "flush-confirmed"
-      | "flush-queued"
-      | "network-offline"
-      | "network-online"
-  ) => {
-    setNextWriteState(getWriteStateAfterEvent(writeStateRef.current, event));
-  };
-
-  const scheduleWriteConfirmation = () => {
-    emitWriteEvent("flush-queued");
-
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    if (commitTimerRef.current !== null) {
-      window.clearTimeout(commitTimerRef.current);
-    }
-
-    commitTimerRef.current = window.setTimeout(() => {
-      commitTimerRef.current = null;
-      emitWriteEvent("flush-confirmed");
-    }, WRITE_CONFIRMATION_DELAY_MS);
-  };
-
-  const ensureCellVisible = (address: CellAddress) => {
-    const node = scrollRef.current;
-
-    if (!node) {
-      return;
-    }
-
-    const layout = getCellLayout(address, columnLayout, rowLayout);
-    const cellRight = layout.left + layout.width;
-    const cellBottom = layout.top + layout.height;
-
-    if (layout.left < node.scrollLeft) {
-      node.scrollLeft = layout.left;
-    } else if (cellRight > node.scrollLeft + node.clientWidth) {
-      node.scrollLeft = cellRight - node.clientWidth;
-    }
-
-    if (layout.top < node.scrollTop) {
-      node.scrollTop = layout.top;
-    } else if (cellBottom > node.scrollTop + node.clientHeight) {
-      node.scrollTop = cellBottom - node.clientHeight;
-    }
-  };
-
-  const applySelection = (
-    nextSelection: Selection,
-    visibleAddress?: CellAddress
-  ) => {
-    setSelection(nextSelection);
-    ensureCellVisible(
-      visibleAddress ??
-        (nextSelection.type === "cell"
-          ? nextSelection.anchor
-          : nextSelection.end)
-    );
-  };
-  const selectColumn = (column: number) => {
-    applySelection(
-      createRangeSelection(
-        { col: column, row: 1 },
-        { col: column, row: bounds.rowCount }
-      ),
-      { col: column, row: activeCell.row }
-    );
-  };
-  const selectRow = (row: number) => {
-    applySelection(
-      createRangeSelection({ col: 1, row }, { col: bounds.colCount, row }),
-      { col: activeCell.col, row }
-    );
-  };
-
-  const resetEditSessionTracking = () => {
-    editSessionInitialValueRef.current = null;
-    editSessionHistoryStateRef.current = null;
-  };
-
+  // ── Live edit sync ─────────────────────────────────────────────────────
   const flushPendingLiveEditSync = () => {
     const pendingSync = pendingLiveEditSyncRef.current;
 
@@ -890,6 +817,12 @@ export function VirtualizedSheet({
     }, LIVE_EDIT_SYNC_DELAY_MS);
   };
 
+  // ── Edit session ───────────────────────────────────────────────────────
+  const resetEditSessionTracking = () => {
+    editSessionInitialValueRef.current = null;
+    editSessionHistoryStateRef.current = null;
+  };
+
   const finalizeEditHistory = () => {
     const beforeState = editSessionHistoryStateRef.current;
 
@@ -926,24 +859,12 @@ export function VirtualizedSheet({
     resetEditSessionTracking();
   };
 
-  const clearSelectionContents = () => {
-    runTrackedMutation(() => {
-      const clearedKeys = selectionMembers.rows.flatMap((row) =>
-        selectionMembers.columns.map((col) => ({
-          key: createCellKey({ col, row }),
-          raw: "",
-        }))
-      );
-
-      if (clearedKeys.length === 0) {
-        return;
-      }
-
-      applyOptimisticBatchWrite(clearedKeys);
-      syncBatchUpsert(clearedKeys);
-      scheduleWriteConfirmation();
-      syncDocumentTimestamp();
-    });
+  const stopEditing = () => {
+    setEditingAddress(null);
+    setEditingSurface(null);
+    setDraftValue("");
+    setEditorMode("view");
+    keyboardProxyRef.current?.focus();
   };
 
   const startEditing = (
@@ -985,14 +906,6 @@ export function VirtualizedSheet({
     });
   };
 
-  const stopEditing = () => {
-    setEditingAddress(null);
-    setEditingSurface(null);
-    setDraftValue("");
-    setEditorMode("view");
-    keyboardProxyRef.current?.focus();
-  };
-
   const commitEditing = (options?: { nextSelection?: Selection }) => {
     if (!editingAddress) {
       return;
@@ -1023,503 +936,40 @@ export function VirtualizedSheet({
     applySelection(createCellSelection(editingAddress));
   };
 
-  const handleExport = (format: "csv" | "json" | "tsv") => {
-    const cells = sheet.getCells();
-    const snapshot = sheet.snapshot();
-    const usedColumns = new Set<number>();
-    const usedRows = new Set<number>();
-
-    for (const key of cells.keys()) {
-      const address = parseCellKey(key);
-      usedColumns.add(address.col);
-      usedRows.add(address.row);
-    }
-
-    const columns = usedColumns.size
-      ? snapshot.columnOrder.filter((column) => usedColumns.has(column))
-      : [activeCell.col];
-    const rows = usedRows.size
-      ? snapshot.rowOrder.filter((row) => usedRows.has(row))
-      : [activeCell.row];
-    const matrix = getSelectionMatrix(sheet, columns, rows);
-    const baseName = sanitizeFileName(document.title) || "sheet";
-
-    if (format === "json") {
-      downloadExport(
-        `${baseName}.json`,
-        createJsonExport({
-          cells,
-          columnOrder: snapshot.columnOrder,
-          columnWidths: snapshot.columnWidths,
-          formats: snapshot.formats,
-          rowHeights: snapshot.rowHeights,
-          rowOrder: snapshot.rowOrder,
-        }),
-        "application/json"
+  // ── Selection operations ───────────────────────────────────────────────
+  const clearSelectionContents = () => {
+    runTrackedMutation(() => {
+      const clearedKeys = selectionMembers.rows.flatMap((row) =>
+        selectionMembers.columns.map((col) => ({
+          key: createCellKey({ col, row }),
+          raw: "",
+        }))
       );
-      return;
-    }
 
-    downloadExport(
-      `${baseName}.${format}`,
-      createDelimitedExport(matrix, format === "csv" ? "," : "\t"),
-      format === "csv" ? "text/csv" : "text/tab-separated-values"
-    );
-  };
-
-  useEffect(() => {
-    if (!editingAddress) {
-      return;
-    }
-
-    inputRef.current?.focus();
-    const input = inputRef.current;
-
-    if (!input) {
-      return;
-    }
-
-    if (cellEditorSelectionBehaviorRef.current === "select-all") {
-      input.select();
-      return;
-    }
-
-    const caretPosition = input.value.length;
-    input.setSelectionRange(caretPosition, caretPosition);
-  }, [editingAddress]);
-
-  useEffect(() => {
-    if (!(editingAddress && editingSurface === "formula-bar")) {
-      return;
-    }
-
-    formulaBarRef.current?.focus();
-    formulaBarRef.current?.select();
-  }, [editingAddress, editingSurface]);
-
-  useEffect(() => {
-    if (!isSearchPanelOpen) {
-      return;
-    }
-
-    searchInputRef.current?.focus();
-    searchInputRef.current?.select();
-  }, [isSearchPanelOpen]);
-
-  useEffect(() => {
-    onWriteStateChange?.("idle");
-  }, [onWriteStateChange]);
-
-  useEffect(() => {
-    setRenameDraft(document.title);
-  }, [document.title]);
-
-  useEffect(() => {
-    const handlePointerDown = (event: PointerEvent) => {
-      const target = event.target;
-
-      if (!(target instanceof Element)) {
+      if (clearedKeys.length === 0) {
         return;
       }
 
-      if (
-        target.closest("[data-menu-root]") ||
-        target.closest("[data-dialog-root]")
-      ) {
-        return;
-      }
-
-      setActiveMenu(null);
-    };
-
-    const handleEscape = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setActiveMenu(null);
-        setActiveHelpPanel(null);
-        setIsRenameDialogOpen(false);
-        setIsSearchPanelOpen(false);
-      }
-    };
-
-    window.addEventListener("pointerdown", handlePointerDown);
-    window.addEventListener("keydown", handleEscape);
-
-    return () => {
-      window.removeEventListener("pointerdown", handlePointerDown);
-      window.removeEventListener("keydown", handleEscape);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    const updateWriteState = (nextWriteState: WriteState) => {
-      writeStateRef.current = nextWriteState;
-      setWriteState(nextWriteState);
-      onWriteStateChange?.(nextWriteState);
-    };
-
-    const emitWindowWriteEvent = (
-      event:
-        | "flush-confirmed"
-        | "flush-queued"
-        | "network-offline"
-        | "network-online"
-    ) => {
-      updateWriteState(getWriteStateAfterEvent(writeStateRef.current, event));
-    };
-
-    const handleOffline = () => {
-      updateWriteState("offline");
-    };
-
-    const handleOnline = () => {
-      emitWindowWriteEvent("network-online");
-
-      if (reconnectTimerRef.current !== null) {
-        window.clearTimeout(reconnectTimerRef.current);
-      }
-
-      reconnectTimerRef.current = window.setTimeout(() => {
-        reconnectTimerRef.current = null;
-        updateWriteState(commitTimerRef.current === null ? "saved" : "saving");
-      }, RECONNECT_SETTLE_DELAY_MS);
-    };
-
-    window.addEventListener("offline", handleOffline);
-    window.addEventListener("online", handleOnline);
-
-    if (!window.navigator.onLine) {
-      handleOffline();
-    }
-
-    return () => {
-      window.removeEventListener("offline", handleOffline);
-      window.removeEventListener("online", handleOnline);
-
-      if (commitTimerRef.current !== null) {
-        window.clearTimeout(commitTimerRef.current);
-      }
-
-      if (reconnectTimerRef.current !== null) {
-        window.clearTimeout(reconnectTimerRef.current);
-      }
-    };
-  }, [onWriteStateChange]);
-
-  const handleHeaderPointerMove = useEffectEvent(
-    (event: globalThis.PointerEvent) => {
-      if (!headerDragState) {
-        return;
-      }
-
-      const node = scrollRef.current;
-
-      if (!node) {
-        return;
-      }
-
-      const rect = node.getBoundingClientRect();
-      const pointerX = event.clientX - rect.left + node.scrollLeft;
-      const pointerY = event.clientY - rect.top + node.scrollTop;
-
-      if (headerDragState.type === "resize") {
-        if (headerDragState.axis === "col") {
-          const layout = getAxisLayoutByLogicalIndex(
-            columnLayout,
-            headerDragState.logicalIndex
-          );
-
-          applyColumnWidth(
-            headerDragState.logicalIndex,
-            pointerX - layout.start
-          );
-          return;
-        }
-
-        const layout = getAxisLayoutByLogicalIndex(
-          rowLayout,
-          headerDragState.logicalIndex
-        );
-
-        applyRowHeight(headerDragState.logicalIndex, pointerY - layout.start);
-        return;
-      }
-
-      if (headerDragState.axis === "col") {
-        const nextTarget = getCellAddressFromPoint(
-          { x: pointerX, y: 0 },
-          bounds,
-          columnLayout,
-          rowLayout
-        ).col;
-
-        setHeaderDragState((current) =>
-          current?.type === "reorder" && current.axis === "col"
-            ? {
-                ...current,
-                targetLogicalIndex: nextTarget,
-              }
-            : current
-        );
-        return;
-      }
-
-      const nextTarget = getCellAddressFromPoint(
-        { x: 0, y: pointerY },
-        bounds,
-        columnLayout,
-        rowLayout
-      ).row;
-
-      setHeaderDragState((current) =>
-        current?.type === "reorder" && current.axis === "row"
-          ? {
-              ...current,
-              targetLogicalIndex: nextTarget,
-            }
-          : current
-      );
-    }
-  );
-
-  const handleHeaderPointerUp = useEffectEvent(() => {
-    if (!headerDragState) {
-      return;
-    }
-
-    commitHeaderDrag({
-      applyColumnOrder,
-      applyRowOrder,
-      headerDragState,
-      scheduleWriteConfirmation,
-      setColumnWidth,
-      setRowHeight,
-      sheet,
-      syncDocumentTimestamp,
+      applyOptimisticBatchWrite(clearedKeys);
+      syncBatchUpsert(clearedKeys);
+      scheduleWriteConfirmation();
+      syncDocumentTimestamp();
     });
+  };
 
-    setHeaderDragState(null);
-  });
-
-  useEffect(() => {
-    if (!headerDragState) {
-      return;
-    }
-
-    window.addEventListener("pointermove", handleHeaderPointerMove);
-    window.addEventListener("pointerup", handleHeaderPointerUp, { once: true });
-
-    return () => {
-      window.removeEventListener("pointermove", handleHeaderPointerMove);
-      window.removeEventListener("pointerup", handleHeaderPointerUp);
-    };
-  }, [headerDragState]);
-
-  const getAddressFromPointerEvent = (
-    event: ReactPointerEvent<HTMLDivElement>
-  ) => {
-    const node = scrollRef.current;
-
-    if (!node) {
-      return null;
-    }
-
-    const rect = node.getBoundingClientRect();
-
-    return getCellAddressFromPoint(
-      {
-        x: event.clientX - rect.left + node.scrollLeft,
-        y: event.clientY - rect.top + node.scrollTop,
+  const clearSelectionFormatting = () => {
+    commitTrackedSheetMutation({
+      mutation: () => {
+        for (const row of selectionMembers.rows) {
+          for (const col of selectionMembers.columns) {
+            sheet.clearCellFormat({ col, row });
+          }
+        }
       },
-      bounds,
-      columnLayout,
-      rowLayout
-    );
+    });
   };
 
-  const handlePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (editingAddress || headerDragState) {
-      return;
-    }
-
-    const node = scrollRef.current;
-    const nextAddress = getAddressFromPointerEvent(event);
-
-    if (!(node && nextAddress)) {
-      return;
-    }
-
-    event.preventDefault();
-    keyboardProxyRef.current?.focus();
-    isPointerSelectingRef.current = true;
-    pointerAnchorRef.current = event.shiftKey
-      ? getSelectionAnchor(selection)
-      : nextAddress;
-    applySelection(
-      event.shiftKey
-        ? createRangeSelection(getSelectionAnchor(selection), nextAddress)
-        : createCellSelection(nextAddress)
-    );
-    node.setPointerCapture(event.pointerId);
-  };
-
-  const handlePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (!isPointerSelectingRef.current) {
-      return;
-    }
-
-    const nextAddress = getAddressFromPointerEvent(event);
-    const anchor = pointerAnchorRef.current;
-
-    if (!(nextAddress && anchor)) {
-      return;
-    }
-
-    setSelection(createRangeSelection(anchor, nextAddress));
-  };
-
-  const handlePointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const node = scrollRef.current;
-
-    if (node?.hasPointerCapture(event.pointerId)) {
-      node.releasePointerCapture(event.pointerId);
-    }
-
-    isPointerSelectingRef.current = false;
-    pointerAnchorRef.current = null;
-  };
-
-  const handleDoubleClick = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const nextAddress = getAddressFromPointerEvent(event);
-
-    if (!nextAddress) {
-      return;
-    }
-
-    event.preventDefault();
-    keyboardProxyRef.current?.focus();
-    startEditing(nextAddress);
-  };
-  const handleColumnHeaderPointerDown = (
-    event: ReactPointerEvent<HTMLDivElement>,
-    column: number
-  ) => {
-    event.preventDefault();
-    event.stopPropagation();
-    keyboardProxyRef.current?.focus();
-
-    if (isFullColumnSelection && selectedColumnSet.has(column)) {
-      setHeaderDragState({
-        axis: "col",
-        sourceLogicalIndex: column,
-        targetLogicalIndex: column,
-        type: "reorder",
-      });
-      return;
-    }
-
-    selectColumn(column);
-  };
-  const handleRowHeaderPointerDown = (
-    event: ReactPointerEvent<HTMLDivElement>,
-    row: number
-  ) => {
-    event.preventDefault();
-    event.stopPropagation();
-    keyboardProxyRef.current?.focus();
-
-    if (isFullRowSelection && selectedRowSet.has(row)) {
-      setHeaderDragState({
-        axis: "row",
-        sourceLogicalIndex: row,
-        targetLogicalIndex: row,
-        type: "reorder",
-      });
-      return;
-    }
-
-    selectRow(row);
-  };
-
-  const handleKeyDown = (
-    event: KeyboardEvent<HTMLDivElement | HTMLTextAreaElement>
-  ) => {
-    if (editingAddress) {
-      return;
-    }
-
-    const shortcutArgs: ShortcutHandlerArgs = {
-      activeCellFormat,
-      applyFormattingPatch,
-      clearSelectionFormatting,
-      cutSelectionContents,
-      event,
-      insertColumn,
-      insertRow,
-      openRenameDialog,
-      openSearchPanel,
-      redoSelectionChange,
-      setActiveHelpPanel,
-      setFreezeFirstColumn,
-      setFreezeTopRow,
-      setShowCrosshairHighlight,
-      setShowFormulaBar,
-      setShowGridlines,
-      undoSelectionChange,
-    };
-
-    if (handleMetaShortcuts(shortcutArgs)) {
-      return;
-    }
-
-    if (handleViewShortcuts(shortcutArgs)) {
-      return;
-    }
-
-    if (handleFormatAndInsertShortcuts(shortcutArgs)) {
-      return;
-    }
-
-    if (handleInsertShortcuts(shortcutArgs)) {
-      return;
-    }
-
-    if (
-      handleNavigationShortcuts({
-        activeCell,
-        applySelection,
-        bounds,
-        clearSelectionContents,
-        columnLayout,
-        event,
-        rowLayout,
-        selection,
-        startTypingEdit,
-      })
-    ) {
-      return;
-    }
-  };
-
-  const handleCopy = (
-    event: ClipboardEvent<HTMLDivElement | HTMLTextAreaElement>
-  ) => {
-    event.preventDefault();
-    const text = getSelectionClipboardText();
-    clipboardTextRef.current = text;
-    event.clipboardData.setData("text/plain", text);
-  };
-
-  const handleCut = (
-    event: ClipboardEvent<HTMLDivElement | HTMLTextAreaElement>
-  ) => {
-    handleCopy(event);
-    clearSelectionContents();
-  };
-
+  // ── Clipboard ──────────────────────────────────────────────────────────
   const getSelectionClipboardText = () => {
     const matrix = getSelectionMatrix(
       sheet,
@@ -1636,18 +1086,7 @@ export function VirtualizedSheet({
     applyPastedMatrix(matrix);
   };
 
-  const clearSelectionFormatting = () => {
-    commitTrackedSheetMutation({
-      mutation: () => {
-        for (const row of selectionMembers.rows) {
-          for (const col of selectionMembers.columns) {
-            sheet.clearCellFormat({ col, row });
-          }
-        }
-      },
-    });
-  };
-
+  // ── Sorting ────────────────────────────────────────────────────────────
   const sortSelectionRows = (direction: "asc" | "desc") => {
     const targetRows =
       selectionMembers.rows.length > 1 ? selectionMembers.rows : populatedRows;
@@ -1672,6 +1111,7 @@ export function VirtualizedSheet({
     });
   };
 
+  // ── Insert rows/columns ────────────────────────────────────────────────
   const insertRow = (placement: "above" | "below") => {
     const targetRow =
       placement === "above"
@@ -1706,6 +1146,7 @@ export function VirtualizedSheet({
     });
   };
 
+  // ── Undo/Redo ──────────────────────────────────────────────────────────
   const undoSelectionChange = () => {
     const previousState = historyRef.current.past.at(-1);
 
@@ -1750,104 +1191,70 @@ export function VirtualizedSheet({
     restoreHistoryState(nextState);
   };
 
+  // ── Search ─────────────────────────────────────────────────────────────
+  const search = useSheetSearch({
+    activeCellKey,
+    applySelection,
+    cellsSnapshot,
+    commitTrackedSheetMutation,
+    searchInputRef,
+    sheet,
+  });
+
+  // ── Export ─────────────────────────────────────────────────────────────
+  const handleExport = (format: "csv" | "json" | "tsv") => {
+    const cells = sheet.getCells();
+    const snapshot = sheet.snapshot();
+    const usedColumns = new Set<number>();
+    const usedRows = new Set<number>();
+
+    for (const key of cells.keys()) {
+      const address = parseCellKey(key);
+      usedColumns.add(address.col);
+      usedRows.add(address.row);
+    }
+
+    const columns = usedColumns.size
+      ? snapshot.columnOrder.filter((column) => usedColumns.has(column))
+      : [activeCell.col];
+    const rows = usedRows.size
+      ? snapshot.rowOrder.filter((row) => usedRows.has(row))
+      : [activeCell.row];
+    const matrix = getSelectionMatrix(sheet, columns, rows);
+    const baseName = sanitizeFileName(document.title) || "sheet";
+
+    if (format === "json") {
+      downloadExport(
+        `${baseName}.json`,
+        createJsonExport({
+          cells,
+          columnOrder: snapshot.columnOrder,
+          columnWidths: snapshot.columnWidths,
+          formats: snapshot.formats,
+          rowHeights: snapshot.rowHeights,
+          rowOrder: snapshot.rowOrder,
+        }),
+        "application/json"
+      );
+      return;
+    }
+
+    downloadExport(
+      `${baseName}.${format}`,
+      createDelimitedExport(matrix, format === "csv" ? "," : "\t"),
+      format === "csv" ? "text/csv" : "text/tab-separated-values"
+    );
+  };
+
+  // ── Rename ─────────────────────────────────────────────────────────────
+  const closeMenus = () => {
+    setActiveMenu(null);
+  };
   const openRenameDialog = () => {
     setRenameDraft(document.title);
     setIsRenameDialogOpen(true);
     closeMenus();
   };
-
-  const escapeSearchPattern = (value: string) =>
-    value.replaceAll(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-
-  const replaceSearchValue = (value: string, replaceAll: boolean) => {
-    if (searchQuery.trim() === "") {
-      return value;
-    }
-
-    const pattern = new RegExp(
-      escapeSearchPattern(searchQuery),
-      `${replaceAll ? "g" : ""}${isSearchCaseSensitive ? "" : "i"}`
-    );
-
-    return value.replace(pattern, replaceValue);
-  };
-
-  const jumpToSearchMatch = (direction: "next" | "previous") => {
-    if (searchMatches.length === 0) {
-      return;
-    }
-
-    const delta = direction === "next" ? 1 : -1;
-    let nextIndex =
-      (activeSearchMatchIndex + delta + searchMatches.length) %
-      searchMatches.length;
-
-    if (activeSearchMatchIndex === -1) {
-      nextIndex = direction === "next" ? 0 : searchMatches.length - 1;
-    }
-    const nextMatch = searchMatches[nextIndex];
-
-    if (!nextMatch) {
-      return;
-    }
-
-    applySelection(createCellSelection(parseCellKey(nextMatch.key)));
-  };
-
-  const replaceCurrentSearchMatch = () => {
-    const targetMatch =
-      activeSearchMatchIndex === -1
-        ? searchMatches[0]
-        : searchMatches[activeSearchMatchIndex];
-
-    if (!targetMatch) {
-      return;
-    }
-
-    const nextRaw = replaceSearchValue(targetMatch.raw, false);
-
-    if (nextRaw === targetMatch.raw) {
-      jumpToSearchMatch("next");
-      return;
-    }
-
-    commitTrackedSheetMutation({
-      mutation: () => {
-        sheet.setCellByKey(targetMatch.key, nextRaw);
-      },
-      nextSelection: createCellSelection(parseCellKey(targetMatch.key)),
-    });
-  };
-
-  const replaceAllSearchMatches = () => {
-    if (searchMatches.length === 0) {
-      return;
-    }
-
-    const replacements = searchMatches
-      .map((match) => ({
-        key: match.key,
-        nextRaw: replaceSearchValue(match.raw, true),
-      }))
-      .filter((entry) => {
-        const currentRaw = sheet.getCellByKey(entry.key)?.raw ?? "";
-        return entry.nextRaw !== currentRaw;
-      });
-
-    if (replacements.length === 0) {
-      return;
-    }
-
-    commitTrackedSheetMutation({
-      mutation: () => {
-        for (const replacement of replacements) {
-          sheet.setCellByKey(replacement.key, replacement.nextRaw);
-        }
-      },
-      nextSelection: createCellSelection(parseCellKey(replacements[0].key)),
-    });
-  };
-
   const submitRename = async () => {
     const nextTitle = renameDraft.trim();
 
@@ -1860,6 +1267,291 @@ export function VirtualizedSheet({
     setIsRenameDialogOpen(false);
   };
 
+  // ── Effects ────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!editingAddress) {
+      return;
+    }
+
+    inputRef.current?.focus();
+    const input = inputRef.current;
+
+    if (!input) {
+      return;
+    }
+
+    if (cellEditorSelectionBehaviorRef.current === "select-all") {
+      input.select();
+      return;
+    }
+
+    const caretPosition = input.value.length;
+    input.setSelectionRange(caretPosition, caretPosition);
+  }, [editingAddress]);
+
+  useEffect(() => {
+    if (!(editingAddress && editingSurface === "formula-bar")) {
+      return;
+    }
+
+    formulaBarRef.current?.focus();
+    formulaBarRef.current?.select();
+  }, [editingAddress, editingSurface]);
+
+  useEffect(() => {
+    if (!search.isSearchPanelOpen) {
+      return;
+    }
+
+    searchInputRef.current?.focus();
+    searchInputRef.current?.select();
+  }, [search.isSearchPanelOpen]);
+
+  useEffect(() => {
+    setRenameDraft(document.title);
+  }, [document.title]);
+
+  useEffect(() => {
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+
+      if (!(target instanceof Element)) {
+        return;
+      }
+
+      if (
+        target.closest("[data-menu-root]") ||
+        target.closest("[data-dialog-root]")
+      ) {
+        return;
+      }
+
+      setActiveMenu(null);
+    };
+
+    const handleEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setActiveMenu(null);
+        setActiveHelpPanel(null);
+        setIsRenameDialogOpen(false);
+        search.setIsSearchPanelOpen(false);
+      }
+    };
+
+    window.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("keydown", handleEscape);
+
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("keydown", handleEscape);
+    };
+  }, [search.setIsSearchPanelOpen]);
+
+  // ── Pointer handlers ──────────────────────────────────────────────────
+  const getAddressFromPointerEvent = (
+    event: ReactPointerEvent<HTMLDivElement>
+  ) => {
+    const node = scrollRef.current;
+
+    if (!node) {
+      return null;
+    }
+
+    const rect = node.getBoundingClientRect();
+
+    return getCellAddressFromPoint(
+      {
+        x: event.clientX - rect.left + node.scrollLeft,
+        y: event.clientY - rect.top + node.scrollTop,
+      },
+      bounds,
+      columnLayout,
+      rowLayout
+    );
+  };
+
+  const handlePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (editingAddress || headerDragState) {
+      return;
+    }
+
+    const node = scrollRef.current;
+    const nextAddress = getAddressFromPointerEvent(event);
+
+    if (!(node && nextAddress)) {
+      return;
+    }
+
+    event.preventDefault();
+    keyboardProxyRef.current?.focus();
+    isPointerSelectingRef.current = true;
+    pointerAnchorRef.current = event.shiftKey
+      ? getSelectionAnchor(selection)
+      : nextAddress;
+    applySelection(
+      event.shiftKey
+        ? createRangeSelection(getSelectionAnchor(selection), nextAddress)
+        : createCellSelection(nextAddress)
+    );
+    node.setPointerCapture(event.pointerId);
+  };
+
+  const handlePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!isPointerSelectingRef.current) {
+      return;
+    }
+
+    const nextAddress = getAddressFromPointerEvent(event);
+    const anchor = pointerAnchorRef.current;
+
+    if (!(nextAddress && anchor)) {
+      return;
+    }
+
+    setSelection(createRangeSelection(anchor, nextAddress));
+  };
+
+  const handlePointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const node = scrollRef.current;
+
+    if (node?.hasPointerCapture(event.pointerId)) {
+      node.releasePointerCapture(event.pointerId);
+    }
+
+    isPointerSelectingRef.current = false;
+    pointerAnchorRef.current = null;
+  };
+
+  const handleDoubleClick = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const nextAddress = getAddressFromPointerEvent(event);
+
+    if (!nextAddress) {
+      return;
+    }
+
+    event.preventDefault();
+    keyboardProxyRef.current?.focus();
+    startEditing(nextAddress);
+  };
+
+  const handleColumnHeaderPointerDown = (
+    event: ReactPointerEvent<HTMLDivElement>,
+    column: number
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    keyboardProxyRef.current?.focus();
+
+    if (isFullColumnSelection && selectedColumnSet.has(column)) {
+      setHeaderDragState({
+        axis: "col",
+        sourceLogicalIndex: column,
+        targetLogicalIndex: column,
+        type: "reorder",
+      });
+      return;
+    }
+
+    selectColumn(column);
+  };
+  const handleRowHeaderPointerDown = (
+    event: ReactPointerEvent<HTMLDivElement>,
+    row: number
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    keyboardProxyRef.current?.focus();
+
+    if (isFullRowSelection && selectedRowSet.has(row)) {
+      setHeaderDragState({
+        axis: "row",
+        sourceLogicalIndex: row,
+        targetLogicalIndex: row,
+        type: "reorder",
+      });
+      return;
+    }
+
+    selectRow(row);
+  };
+
+  // ── Keyboard handlers ─────────────────────────────────────────────────
+  const handleKeyDown = (
+    event: KeyboardEvent<HTMLDivElement | HTMLTextAreaElement>
+  ) => {
+    if (editingAddress) {
+      return;
+    }
+
+    const shortcutArgs: ShortcutHandlerArgs = {
+      activeCellFormat,
+      applyFormattingPatch,
+      clearSelectionFormatting,
+      cutSelectionContents,
+      event,
+      insertColumn,
+      insertRow,
+      openRenameDialog,
+      openSearchPanel: () => {
+        search.openSearchPanel();
+        closeMenus();
+      },
+      redoSelectionChange,
+      setActiveHelpPanel,
+      setFreezeFirstColumn,
+      setFreezeTopRow,
+      setShowCrosshairHighlight,
+      setShowFormulaBar,
+      setShowGridlines,
+      undoSelectionChange,
+    };
+
+    if (handleMetaShortcuts(shortcutArgs)) {
+      return;
+    }
+
+    if (handleViewShortcuts(shortcutArgs)) {
+      return;
+    }
+
+    if (handleFormatAndInsertShortcuts(shortcutArgs)) {
+      return;
+    }
+
+    if (handleInsertShortcuts(shortcutArgs)) {
+      return;
+    }
+
+    handleNavigationShortcuts({
+      activeCell,
+      applySelection,
+      bounds,
+      clearSelectionContents,
+      columnLayout,
+      event,
+      rowLayout,
+      selection,
+      startTypingEdit,
+    });
+  };
+
+  // ── Clipboard handlers ────────────────────────────────────────────────
+  const handleCopy = (
+    event: ClipboardEvent<HTMLDivElement | HTMLTextAreaElement>
+  ) => {
+    event.preventDefault();
+    const text = getSelectionClipboardText();
+    clipboardTextRef.current = text;
+    event.clipboardData.setData("text/plain", text);
+  };
+
+  const handleCut = (
+    event: ClipboardEvent<HTMLDivElement | HTMLTextAreaElement>
+  ) => {
+    handleCopy(event);
+    clearSelectionContents();
+  };
+
   const handlePaste = (
     event: ClipboardEvent<HTMLDivElement | HTMLTextAreaElement>
   ) => {
@@ -1868,6 +1560,7 @@ export function VirtualizedSheet({
     applyPastedMatrix(parseClipboardMatrix(clipboardTextRef.current));
   };
 
+  // ── Cell editor keyboard ──────────────────────────────────────────────
   const handleInputKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Escape") {
       event.preventDefault();
@@ -1894,6 +1587,7 @@ export function VirtualizedSheet({
     }
   };
 
+  // ── Formula bar handlers ──────────────────────────────────────────────
   const handleFormulaBarFocus = () => {
     startEditing(activeCell, activeCellRaw, "formula-bar");
   };
@@ -1913,6 +1607,34 @@ export function VirtualizedSheet({
     }
   };
 
+  const handleFormulaBarChange = (nextValue: string) => {
+    if (editingAddress == null || editingSurface !== "formula-bar") {
+      startEditing(activeCell, activeCellRaw, "formula-bar");
+    }
+
+    setDraftValue(nextValue);
+    setEditorMode(nextValue.startsWith("=") ? "formula" : "edit");
+    syncLiveEditValue(activeCell, nextValue);
+  };
+
+  const handleFormulaBarBlur = () => {
+    if (editingSurface === "formula-bar") {
+      commitEditing({
+        nextSelection: createCellSelection(activeCell),
+      });
+    }
+  };
+
+  const handleCellEditorChange = (nextValue: string) => {
+    if (!editingAddress) {
+      return;
+    }
+
+    setDraftValue(nextValue);
+    setEditorMode(nextValue.startsWith("=") ? "formula" : "edit");
+    syncLiveEditValue(editingAddress, nextValue);
+  };
+
   const formulaBarValue =
     editingAddress &&
     editingAddress.row === activeCell.row &&
@@ -1920,6 +1642,7 @@ export function VirtualizedSheet({
       ? draftValue
       : activeCellRaw;
 
+  // ── Render ─────────────────────────────────────────────────────────────
   return (
     <section className="relative flex h-full min-h-0 flex-col overflow-hidden bg-[#ffffff]">
       <textarea
@@ -1966,7 +1689,10 @@ export function VirtualizedSheet({
           setActiveMenu((current) => (current === menuKey ? null : menuKey));
         }}
         openRenameDialog={openRenameDialog}
-        openSearchPanel={openSearchPanel}
+        openSearchPanel={() => {
+          search.openSearchPanel();
+          closeMenus();
+        }}
         pasteSelectionContents={pasteSelectionContents}
         redoSelectionChange={redoSelectionChange}
         selectionDimensions={selectionDimensions}
@@ -1997,74 +1723,45 @@ export function VirtualizedSheet({
         clearSelectionFormatting={clearSelectionFormatting}
         copySelectionContents={copySelectionContents}
         cutSelectionContents={cutSelectionContents}
-        isSearchPanelOpen={isSearchPanelOpen}
+        isSearchPanelOpen={search.isSearchPanelOpen}
         pasteSelectionContents={pasteSelectionContents}
         redoSelectionChange={redoSelectionChange}
-        setIsSearchPanelOpen={setIsSearchPanelOpen}
+        setIsSearchPanelOpen={search.setIsSearchPanelOpen}
         sortSelectionRows={sortSelectionRows}
         undoSelectionChange={undoSelectionChange}
       />
-      {isSearchPanelOpen ? (
+
+      {search.isSearchPanelOpen ? (
         <SearchPanel
-          activeSearchMatchIndex={activeSearchMatchIndex}
-          closeSearchPanel={closeSearchPanel}
-          isSearchCaseSensitive={isSearchCaseSensitive}
-          jumpToSearchMatch={jumpToSearchMatch}
-          replaceAllSearchMatches={replaceAllSearchMatches}
-          replaceCurrentSearchMatch={replaceCurrentSearchMatch}
-          replaceValue={replaceValue}
+          activeSearchMatchIndex={search.activeSearchMatchIndex}
+          closeSearchPanel={search.closeSearchPanel}
+          isSearchCaseSensitive={search.isSearchCaseSensitive}
+          jumpToSearchMatch={search.jumpToSearchMatch}
+          replaceAllSearchMatches={search.replaceAllSearchMatches}
+          replaceCurrentSearchMatch={search.replaceCurrentSearchMatch}
+          replaceValue={search.replaceValue}
           searchInputRef={searchInputRef}
-          searchMatches={searchMatches}
-          searchQuery={searchQuery}
-          setIsSearchCaseSensitive={setIsSearchCaseSensitive}
-          setReplaceValue={setReplaceValue}
-          setSearchQuery={setSearchQuery}
+          searchMatches={search.searchMatches}
+          searchQuery={search.searchQuery}
+          setIsSearchCaseSensitive={search.setIsSearchCaseSensitive}
+          setReplaceValue={search.setReplaceValue}
+          setSearchQuery={search.setSearchQuery}
         />
       ) : null}
+
       <div className="border-[#e0e3e7] border-b bg-[#f8f9fa]">
         {showFormulaBar ? (
-          <div className="grid grid-cols-[5rem_2rem_minmax(0,1fr)_auto] items-center gap-0 border-[#e0e0e0] border-t">
-            <div className="flex h-full items-center border-[#e0e0e0] border-r px-3 font-mono text-[#202124] text-[0.75rem]">
-              {getColumnHeaderLabel(activeCell.col)}
-              {activeCell.row}
-            </div>
-            <div className="flex h-full items-center justify-center border-[#e0e0e0] border-r text-[#80868b] text-[0.75rem] italic">
-              fx
-            </div>
-            <input
-              className="h-8 w-full bg-transparent px-2.5 text-[#202124] text-[0.8125rem] outline-none placeholder:text-[#9aa0a6]"
-              onBlur={() => {
-                if (editingSurface === "formula-bar") {
-                  commitEditing({
-                    nextSelection: createCellSelection(activeCell),
-                  });
-                }
-              }}
-              onChange={(event) => {
-                const nextValue = event.target.value;
-
-                if (
-                  editingAddress == null ||
-                  editingSurface !== "formula-bar"
-                ) {
-                  startEditing(activeCell, activeCellRaw, "formula-bar");
-                }
-
-                setDraftValue(nextValue);
-                setEditorMode(nextValue.startsWith("=") ? "formula" : "edit");
-                syncLiveEditValue(activeCell, nextValue);
-              }}
-              onFocus={handleFormulaBarFocus}
-              onKeyDown={handleFormulaBarKeyDown}
-              placeholder="Type a value or formula"
-              ref={formulaBarRef}
-              value={formulaBarValue}
-            />
-            <div className="flex items-center justify-end gap-2.5 border-[#e0e0e0] border-l px-3 text-[#80868b] text-[0.6875rem]">
-              <span>{isReady ? "Ready" : "Loading"}</span>
-              <span>{status}</span>
-            </div>
-          </div>
+          <FormulaBar
+            activeCell={activeCell}
+            formulaBarRef={formulaBarRef}
+            formulaBarValue={formulaBarValue}
+            isFormulaReady={isReady}
+            onBlur={handleFormulaBarBlur}
+            onChange={handleFormulaBarChange}
+            onFocus={handleFormulaBarFocus}
+            onKeyDown={handleFormulaBarKeyDown}
+            status={status}
+          />
         ) : null}
       </div>
 
@@ -2075,112 +1772,47 @@ export function VirtualizedSheet({
           }`}
         />
 
-        <div
-          className={`relative overflow-hidden bg-[#f8f9fa] ${
-            showGridlines ? "border-[#e0e0e0] border-b" : ""
-          }`}
-        >
-          {visibleColumns.map((column) => {
-            const layout = getAxisLayoutByLogicalIndex(columnLayout, column);
-            const left = layout.start - viewport.scrollX;
-            const isSelectedColumn = selectedColumnSet.has(column);
-            const isActiveColumn = column === activeCell.col;
-            const isColumnDraggable =
-              isSelectedColumn && isFullColumnSelection && !headerDragState;
+        <ColumnHeaders
+          activeColumn={activeCell.col}
+          columnLayout={columnLayout}
+          headerDragState={headerDragState}
+          isFullColumnSelection={isFullColumnSelection}
+          onColumnHeaderPointerDown={handleColumnHeaderPointerDown}
+          onResizePointerDown={(event, column) => {
+            event.preventDefault();
+            event.stopPropagation();
+            setHeaderDragState({
+              axis: "col",
+              logicalIndex: column,
+              type: "resize",
+            });
+          }}
+          scrollX={viewport.scrollX}
+          selectedColumnSet={selectedColumnSet}
+          showGridlines={showGridlines}
+          visibleColumns={visibleColumns}
+        />
 
-            return (
-              <div
-                className={`absolute top-0 h-full ${
-                  showGridlines ? "border-[#e0e0e0] border-r" : ""
-                }`}
-                key={`column-${column}`}
-                onPointerDown={(event) => {
-                  handleColumnHeaderPointerDown(event, column);
-                }}
-                style={{
-                  backgroundColor: getHeaderBackgroundColor(
-                    isActiveColumn,
-                    isSelectedColumn
-                  ),
-                  color: isSelectedColumn ? "#202124" : "#5f6368",
-                  cursor: isColumnDraggable ? "grab" : "default",
-                  left,
-                  width: layout.size,
-                }}
-              >
-                <div className="flex h-full select-none items-center justify-center px-1 text-[0.6875rem] leading-none">
-                  <span>{getColumnHeaderLabel(column)}</span>
-                </div>
-                <div
-                  className="absolute top-0 right-0 h-full w-2 cursor-col-resize"
-                  onPointerDown={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    setHeaderDragState({
-                      axis: "col",
-                      logicalIndex: column,
-                      type: "resize",
-                    });
-                  }}
-                />
-              </div>
-            );
-          })}
-        </div>
-
-        <div
-          className={`relative overflow-hidden bg-[#f8f9fa] ${
-            showGridlines ? "border-[#e0e0e0] border-r" : ""
-          }`}
-        >
-          {visibleRows.map((row) => {
-            const layout = getAxisLayoutByLogicalIndex(rowLayout, row);
-            const top = layout.start - viewport.scrollY;
-            const isSelectedRow = selectedRowSet.has(row);
-            const isActiveRow = row === activeCell.row;
-            const isRowDraggable =
-              isSelectedRow && isFullRowSelection && !headerDragState;
-
-            return (
-              <div
-                className={`absolute left-0 ${
-                  showGridlines ? "border-[#e0e0e0] border-b" : ""
-                }`}
-                key={`row-${row}`}
-                onPointerDown={(event) => {
-                  handleRowHeaderPointerDown(event, row);
-                }}
-                style={{
-                  backgroundColor: getHeaderBackgroundColor(
-                    isActiveRow,
-                    isSelectedRow
-                  ),
-                  color: isSelectedRow ? "#202124" : "#5f6368",
-                  cursor: isRowDraggable ? "grab" : "default",
-                  height: layout.size,
-                  top,
-                  width: "100%",
-                }}
-              >
-                <div className="flex h-full select-none items-center justify-center px-1 text-[0.6875rem] leading-none">
-                  <span>{row}</span>
-                </div>
-                <div
-                  className="absolute right-0 bottom-0 h-2 w-full cursor-row-resize"
-                  onPointerDown={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    setHeaderDragState({
-                      axis: "row",
-                      logicalIndex: row,
-                      type: "resize",
-                    });
-                  }}
-                />
-              </div>
-            );
-          })}
-        </div>
+        <RowHeaders
+          activeRow={activeCell.row}
+          headerDragState={headerDragState}
+          isFullRowSelection={isFullRowSelection}
+          onResizePointerDown={(event, row) => {
+            event.preventDefault();
+            event.stopPropagation();
+            setHeaderDragState({
+              axis: "row",
+              logicalIndex: row,
+              type: "resize",
+            });
+          }}
+          onRowHeaderPointerDown={handleRowHeaderPointerDown}
+          rowLayout={rowLayout}
+          scrollY={viewport.scrollY}
+          selectedRowSet={selectedRowSet}
+          showGridlines={showGridlines}
+          visibleRows={visibleRows}
+        />
 
         {/* biome-ignore lint/a11y/noNoninteractiveElementInteractions: custom spreadsheet surfaces use pointer-driven selection on a scroll container */}
         <div
@@ -2201,26 +1833,14 @@ export function VirtualizedSheet({
               width: gridWidth,
             }}
           >
-            {showCrosshairHighlight ? (
-              <>
-                <div
-                  className="pointer-events-none absolute left-0 bg-[rgba(37,99,235,0.04)]"
-                  style={{
-                    height: activeCellLayout.height,
-                    top: activeCellLayout.top,
-                    width: "100%",
-                  }}
-                />
-                <div
-                  className="pointer-events-none absolute top-0 bg-[rgba(37,99,235,0.04)]"
-                  style={{
-                    height: "100%",
-                    left: activeCellLayout.left,
-                    width: activeCellLayout.width,
-                  }}
-                />
-              </>
-            ) : null}
+            <SelectionOverlay
+              activeCellLayout={activeCellLayout}
+              columnLayout={columnLayout}
+              peers={peers}
+              rowLayout={rowLayout}
+              selectionRect={selectionRect}
+              showCrosshairHighlight={showCrosshairHighlight}
+            />
 
             {visibleRows.flatMap((row) =>
               visibleColumns.map((column) => (
@@ -2246,223 +1866,40 @@ export function VirtualizedSheet({
               ))
             )}
 
-            {freezeTopRow
-              ? visibleColumns.map((column) => (
-                  <VirtualCell
-                    address={{ col: column, row: 1 }}
-                    columnLayout={columnLayout}
-                    computedValue={computedValues.get(
-                      createCellKey({ col: column, row: 1 })
-                    )}
-                    displayTop={viewport.scrollY}
-                    format={sheet.getCellFormat({ col: column, row: 1 })}
-                    formulaError={formulaErrors.get(
-                      createCellKey({ col: column, row: 1 })
-                    )}
-                    isActive={activeCell.col === column && activeCell.row === 1}
-                    isFrozen
-                    isGridlinesVisible={showGridlines}
-                    isSelected={
-                      selectedColumnSet.has(column) && selectedRowSet.has(1)
-                    }
-                    key={`frozen-top-${column}`}
-                    record={sheet.getCell({ col: column, row: 1 })}
-                    rowLayout={rowLayout}
-                  />
-                ))
-              : null}
-
-            {freezeFirstColumn
-              ? visibleRows.map((row) => (
-                  <VirtualCell
-                    address={{ col: 1, row }}
-                    columnLayout={columnLayout}
-                    computedValue={computedValues.get(
-                      createCellKey({ col: 1, row })
-                    )}
-                    displayLeft={viewport.scrollX}
-                    format={sheet.getCellFormat({ col: 1, row })}
-                    formulaError={formulaErrors.get(
-                      createCellKey({ col: 1, row })
-                    )}
-                    isActive={activeCell.col === 1 && activeCell.row === row}
-                    isFrozen
-                    isGridlinesVisible={showGridlines}
-                    isSelected={
-                      selectedColumnSet.has(1) && selectedRowSet.has(row)
-                    }
-                    key={`frozen-left-${row}`}
-                    record={sheet.getCell({ col: 1, row })}
-                    rowLayout={rowLayout}
-                  />
-                ))
-              : null}
-
-            {freezeTopRow && freezeFirstColumn ? (
-              <VirtualCell
-                address={{ col: 1, row: 1 }}
-                columnLayout={columnLayout}
-                computedValue={computedValues.get(
-                  createCellKey({ col: 1, row: 1 })
-                )}
-                displayLeft={viewport.scrollX}
-                displayTop={viewport.scrollY}
-                format={sheet.getCellFormat({ col: 1, row: 1 })}
-                formulaError={formulaErrors.get(
-                  createCellKey({ col: 1, row: 1 })
-                )}
-                isActive={activeCell.col === 1 && activeCell.row === 1}
-                isFrozen
-                isGridlinesVisible={showGridlines}
-                isSelected={selectedColumnSet.has(1) && selectedRowSet.has(1)}
-                key="frozen-corner"
-                record={sheet.getCell({ col: 1, row: 1 })}
-                rowLayout={rowLayout}
-              />
-            ) : null}
-
-            <div
-              className="pointer-events-none absolute bg-[rgba(37,99,235,0.08)]"
-              style={{
-                height: selectionRect.height,
-                left: selectionRect.left,
-                top: selectionRect.top,
-                width: selectionRect.width,
-              }}
+            <FrozenCells
+              activeCell={activeCell}
+              columnLayout={columnLayout}
+              computedValues={computedValues}
+              formulaErrors={formulaErrors}
+              freezeFirstColumn={freezeFirstColumn}
+              freezeTopRow={freezeTopRow}
+              rowLayout={rowLayout}
+              selectedColumnSet={selectedColumnSet}
+              selectedRowSet={selectedRowSet}
+              sheet={sheet}
+              showGridlines={showGridlines}
+              viewport={viewport}
+              visibleColumns={visibleColumns}
+              visibleRows={visibleRows}
             />
 
-            <div
-              className="pointer-events-none absolute border-2 border-[#2563eb] shadow-[0_0_0_1px_rgba(255,255,255,0.92)]"
-              style={{
-                height: selectionRect.height,
-                left: selectionRect.left,
-                top: selectionRect.top,
-                width: selectionRect.width,
-              }}
+            <DragReorderIndicator
+              columnLayout={columnLayout}
+              headerDragState={headerDragState}
+              rowLayout={rowLayout}
             />
-
-            <div
-              className="pointer-events-none absolute border-2 border-[#2563eb]"
-              style={{
-                height: activeCellLayout.height,
-                left: activeCellLayout.left,
-                top: activeCellLayout.top,
-                width: activeCellLayout.width,
-              }}
-            />
-
-            {peers.map((peer) => {
-              const peerActiveCell = peer.activeCell
-                ? parseCellKey(peer.activeCell)
-                : null;
-              const peerSelection =
-                peer.selection == null
-                  ? null
-                  : createRangeSelection(
-                      parseCellKey(peer.selection.start),
-                      parseCellKey(peer.selection.end)
-                    );
-              const peerSelectionRect =
-                peerSelection == null
-                  ? null
-                  : getSelectionRect(peerSelection, columnLayout, rowLayout);
-
-              return (
-                <div key={`peer-overlay-${peer.userId}`}>
-                  {peerSelectionRect ? (
-                    <div
-                      className="pointer-events-none absolute border-2"
-                      style={{
-                        borderColor: peer.color,
-                        height: peerSelectionRect.height,
-                        left: peerSelectionRect.left,
-                        top: peerSelectionRect.top,
-                        width: peerSelectionRect.width,
-                      }}
-                    />
-                  ) : null}
-                  {peerActiveCell
-                    ? (() => {
-                        const peerCellLayout = getCellLayout(
-                          peerActiveCell,
-                          columnLayout,
-                          rowLayout
-                        );
-                        return (
-                          <div
-                            className="pointer-events-none absolute border-2"
-                            style={{
-                              borderColor: peer.color,
-                              height: peerCellLayout.height,
-                              left: peerCellLayout.left,
-                              top: peerCellLayout.top,
-                              width: peerCellLayout.width,
-                            }}
-                          />
-                        );
-                      })()
-                    : null}
-                </div>
-              );
-            })}
-
-            {headerDragState?.type === "reorder" &&
-            headerDragState.axis === "col" ? (
-              <div
-                className="pointer-events-none absolute top-0 bottom-0 z-20 w-[3px] bg-[#2563eb]"
-                style={{
-                  left:
-                    getAxisLayoutByLogicalIndex(
-                      columnLayout,
-                      headerDragState.targetLogicalIndex
-                    ).start - 1,
-                }}
-              />
-            ) : null}
-
-            {headerDragState?.type === "reorder" &&
-            headerDragState.axis === "row" ? (
-              <div
-                className="pointer-events-none absolute right-0 left-0 z-20 h-[3px] bg-[#2563eb]"
-                style={{
-                  top:
-                    getAxisLayoutByLogicalIndex(
-                      rowLayout,
-                      headerDragState.targetLogicalIndex
-                    ).start - 1,
-                }}
-              />
-            ) : null}
 
             {editingAddress && editingSurface === "cell" ? (
-              <div
-                className="absolute z-20 border-2 border-[#2563eb] bg-white shadow-[0_8px_24px_rgba(32,33,36,0.16)]"
-                style={{
-                  height: activeCellLayout.height,
-                  left: activeCellLayout.left,
-                  top: activeCellLayout.top,
-                  width: activeCellLayout.width,
+              <CellEditor
+                activeCellLayout={activeCellLayout}
+                draftValue={draftValue}
+                inputRef={inputRef}
+                onBlur={() => {
+                  commitEditing();
                 }}
-              >
-                <input
-                  className="h-full w-full bg-transparent px-2 py-1 text-[0.76rem] text-[var(--foreground)] outline-none"
-                  onBlur={() => {
-                    commitEditing();
-                  }}
-                  onChange={(event) => {
-                    const nextValue = event.target.value;
-
-                    setDraftValue(nextValue);
-                    setEditorMode(
-                      nextValue.startsWith("=") ? "formula" : "edit"
-                    );
-                    syncLiveEditValue(editingAddress, nextValue);
-                  }}
-                  onKeyDown={handleInputKeyDown}
-                  ref={inputRef}
-                  value={draftValue}
-                />
-              </div>
+                onChange={handleCellEditorChange}
+                onKeyDown={handleInputKeyDown}
+              />
             ) : null}
           </div>
         </div>
