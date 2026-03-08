@@ -3,7 +3,6 @@
 import { useRouter } from "next/navigation";
 import {
   type ClipboardEvent,
-  type CSSProperties,
   type Dispatch,
   type KeyboardEvent,
   type PointerEvent as ReactPointerEvent,
@@ -21,11 +20,7 @@ import {
 } from "@/features/collaboration/use-collaboration-room";
 import { useFormulaEngine } from "@/features/formulas/use-formula-engine";
 import { createCellKey, parseCellKey } from "@/features/spreadsheet/addressing";
-import {
-  getRenderedCellValue,
-  getResolvedHorizontalAlign,
-} from "@/features/spreadsheet/cell-formatting";
-import { getVisibleWindow } from "@/features/spreadsheet/chunks";
+import { getResolvedHorizontalAlign } from "@/features/spreadsheet/cell-formatting";
 import {
   createDelimitedExport,
   createJsonExport,
@@ -33,17 +28,14 @@ import {
 import {
   createCellSelection,
   createRangeSelection,
-  extendSelection,
   getNavigationDelta,
   getSelectionAnchor,
   getSelectionDimensionsForLayout,
   getSelectionMembers,
   getSelectionRect,
   getWriteStateAfterEvent,
-  isPrintableCellInput,
   moveCellAddressInLayout,
   parseClipboardMatrix,
-  selectionContainsAddress,
   serializeSelectionMatrix,
 } from "@/features/spreadsheet/interaction";
 import {
@@ -52,18 +44,70 @@ import {
   createAxisLayouts,
   getAxisLayoutByLogicalIndex,
   getAxisVisibleSlice,
-  moveAxisItem,
 } from "@/features/spreadsheet/sheet-layout";
 import { SparseSheet } from "@/features/spreadsheet/sparse-sheet";
+import {
+  DEFAULT_VIEWPORT_HEIGHT,
+  DEFAULT_VIEWPORT_WIDTH,
+  useVirtualViewport,
+} from "@/features/spreadsheet/use-virtual-viewport";
 import {
   DEFAULT_SHEET_METRICS,
   getCellAddressFromPoint,
   getCellLayout,
   getColumnHeaderLabel,
   getGridDimensions,
-  getViewportFromScroll,
 } from "@/features/spreadsheet/viewport";
+import {
+  applyRemoteChanges,
+  captureLayoutState,
+  commitHeaderDrag,
+  createSeededSheet,
+  downloadExport,
+  formatWriteState,
+  getCellDisplayValue,
+  getCellKind,
+  getFontFamilyLabel,
+  getHeaderBackgroundColor,
+  getHelpPanelTitle,
+  getSelectionMatrix,
+  getSnapshotChanges,
+  getToolbarButtonClassName,
+  hasSnapshotChanges,
+  sanitizeFileName,
+} from "@/features/spreadsheet/virtualized-sheet-helpers";
+import {
+  handleFormatAndInsertShortcuts,
+  handleInsertShortcuts,
+  handleMetaShortcuts,
+  handleNavigationShortcuts,
+  handleViewShortcuts,
+  type ShortcutHandlerArgs,
+} from "@/features/spreadsheet/virtualized-sheet-shortcuts";
+import type {
+  EditorSurface,
+  HeaderDragState,
+  HelpPanel,
+  HistoryState,
+  KeyedChange,
+  MenuKey,
+  SnapshotChanges,
+} from "@/features/spreadsheet/virtualized-sheet-types";
+import {
+  AlignCenterIcon,
+  AlignLeftIcon,
+  AlignRightIcon,
+  createShortcutLabel,
+  FillColorIcon,
+  FontFamilyIcon,
+  FontSizeIcon,
+  MenuButton,
+  MenuItem,
+  TextColorIcon,
+  VirtualCell,
+} from "@/features/spreadsheet/virtualized-sheet-ui";
 import { renameDocument, touchDocument } from "@/lib/metadata/metadata-store";
+import type { CollaborationPresenceSnapshot } from "@/types/collaboration";
 import type { DocumentMeta, SessionIdentity } from "@/types/metadata";
 import type {
   CellAddress,
@@ -71,1019 +115,31 @@ import type {
   CellFontSize,
   CellFormat,
   CellFormatRecord,
-  CellHorizontalAlignment,
   CellRecord,
-  ComputedValue,
   Selection,
-  SheetBounds,
-  Viewport,
 } from "@/types/spreadsheet";
 import { CELL_FONT_FAMILIES, CELL_FONT_SIZES } from "@/types/spreadsheet";
 import type { EditorMode, WriteState } from "@/types/ui";
 import type { SparseSheetSnapshot } from "./sparse-sheet";
 
-const DEFAULT_VIEWPORT_WIDTH = 960;
-const DEFAULT_VIEWPORT_HEIGHT = 640;
 const DEFAULT_SELECTION: CellAddress = {
   col: 1,
   row: 1,
 };
 const RECONNECT_SETTLE_DELAY_MS = 220;
 const WRITE_CONFIRMATION_DELAY_MS = 180;
-const CELL_FONT_FAMILY_STYLES: Record<CellFontFamily, string> = {
-  display: 'var(--font-display), "Segoe UI", sans-serif',
-  mono: 'var(--font-body), "SFMono-Regular", Consolas, monospace',
-  sans: '"Helvetica Neue", Arial, sans-serif',
-  serif: 'Georgia, "Times New Roman", serif',
-};
-
-type EditorSurface = "cell" | "formula-bar";
-type HelpPanel = "about" | "formulas" | "shortcuts";
-type MenuKey = "edit" | "file" | "format" | "help" | "insert" | "view";
-type ReorderAxis = "col" | "row";
-type HeaderDragState =
-  | {
-      axis: ReorderAxis;
-      sourceLogicalIndex: number;
-      targetLogicalIndex: number;
-      type: "reorder";
-    }
-  | {
-      axis: ReorderAxis;
-      logicalIndex: number;
-      type: "resize";
-    };
-interface HistoryState {
-  selection: Selection;
-  snapshot: SparseSheetSnapshot;
-}
-interface KeyedChange<T> {
-  key: string;
-  value: T | null;
-}
-interface NumericChange {
-  index: number;
-  value: number | null;
-}
-interface SnapshotChanges {
-  cells: KeyedChange<CellRecord>[];
-  columnOrderChanged: boolean;
-  columnWidths: NumericChange[];
-  formats: KeyedChange<CellFormatRecord>[];
-  rowHeights: NumericChange[];
-  rowOrderChanged: boolean;
-}
-
-function createSeededSheet(document: DocumentMeta) {
-  const sheet = new SparseSheet();
-
-  sheet.batchPaste({ col: 1, row: 1 }, [
-    [document.title, "Owner", document.ownerName, "Status", "Phase 5"],
-    [
-      "Room",
-      document.roomId.slice(0, 12),
-      "Modified",
-      new Intl.DateTimeFormat("en", {
-        dateStyle: "medium",
-        timeStyle: "short",
-      }).format(document.lastModifiedAt),
-      "Type, tab, paste, or drag-select",
-    ],
-    ["Rows", "10,000", "Columns", "100", "Logical cells", "1,000,000"],
-  ]);
-
-  sheet.batchPaste({ col: 1, row: 5 }, [
-    ["12", "8", "=A5+B5", "=SUM(A5:B5)", "=SUM(A5,C5)"],
-    ["Formula input", "Formula input", "A+B", "SUM range", "SUM args"],
-  ]);
-
-  sheet.setCell({ col: 1, row: 128 }, "Checkpoint row 128");
-  sheet.setCell({ col: 4, row: 512 }, "Checkpoint row 512");
-  sheet.setCell({ col: 6, row: 4096 }, "Sparse far field");
-  sheet.setCell({ col: 26, row: 9999 }, "Edge probe");
-
-  return sheet;
-}
-
-function getCellDisplayValue(cell: CellRecord | null) {
-  return cell?.raw ?? "";
-}
-
-function getCellKind(raw: string): CellRecord["kind"] {
-  if (raw.startsWith("=")) {
-    return "formula";
-  }
-
-  if (raw.trim() !== "" && Number.isFinite(Number(raw))) {
-    return "number";
-  }
-
-  return "text";
-}
-
-function getSelectionMatrix(
-  sheet: SparseSheet,
-  columnOrder: number[],
-  rowOrder: number[]
-) {
-  return rowOrder.map((row) =>
-    columnOrder.map((col) => getCellDisplayValue(sheet.getCell({ col, row })))
-  );
-}
-
-function getCellBackgroundColor(args: {
-  format: CellFormatRecord | null;
-  isActive: boolean;
-  isSelected: boolean;
-}) {
-  if (args.isActive) {
-    return args.format?.backgroundColor ?? "rgba(42,118,130,0.08)";
-  }
-
-  if (args.isSelected) {
-    return args.format?.backgroundColor ?? "rgba(42,118,130,0.04)";
-  }
-
-  return args.format?.backgroundColor ?? "rgba(255,255,255,0.72)";
-}
-
-function getHeaderBackgroundColor(isActive: boolean, isSelected: boolean) {
-  if (isActive) {
-    return "rgba(42,118,130,0.18)";
-  }
-
-  if (isSelected) {
-    return "rgba(42,118,130,0.1)";
-  }
-
-  return "transparent";
-}
-
-function getToolbarButtonClassName(isActive: boolean) {
-  return `rounded-full border px-3 py-2 text-sm transition-colors ${
-    isActive
-      ? "border-[var(--accent)] bg-[rgba(42,118,130,0.12)] text-[var(--accent)]"
-      : "border-[var(--border)] bg-white/80 hover:border-[rgba(42,118,130,0.2)]"
-  }`;
-}
-
-function getFontFamilyLabel(fontFamily: CellFontFamily) {
-  switch (fontFamily) {
-    case "display":
-      return "Display";
-    case "mono":
-      return "Mono";
-    case "sans":
-      return "Sans";
-    default:
-      return "Serif";
-  }
-}
-
-function getAlignmentLabel(alignment: CellHorizontalAlignment) {
-  switch (alignment) {
-    case "center":
-      return "Center";
-    case "right":
-      return "Right";
-    default:
-      return "Left";
-  }
-}
-
-function getHelpPanelTitle(activeHelpPanel: HelpPanel) {
-  switch (activeHelpPanel) {
-    case "formulas":
-      return "Formula examples";
-    case "shortcuts":
-      return "Keyboard shortcuts";
-    default:
-      return "About this sheet";
-  }
-}
-
-function getCellContentStyle(args: {
-  cell: CellRecord | null;
-  computedValue: ComputedValue | undefined;
-  format: CellFormatRecord | null;
-  formulaError: string | undefined;
-  isActive: boolean;
-  isSelected: boolean;
-}): CSSProperties {
-  return {
-    backgroundColor: getCellBackgroundColor({
-      format: args.format,
-      isActive: args.isActive,
-      isSelected: args.isSelected,
-    }),
-    color: args.formulaError
-      ? "#b42318"
-      : (args.format?.textColor ?? "var(--foreground)"),
-    fontFamily: args.format?.fontFamily
-      ? CELL_FONT_FAMILY_STYLES[args.format.fontFamily]
-      : undefined,
-    fontSize: args.format?.fontSize ? `${args.format.fontSize}px` : undefined,
-    fontStyle: args.format?.italic ? "italic" : "normal",
-    fontWeight: args.format?.bold ? 700 : 400,
-    lineHeight: args.format?.fontSize
-      ? `${Math.max(20, args.format.fontSize + 6)}px`
-      : undefined,
-    textAlign: getResolvedHorizontalAlign({
-      cell: args.cell,
-      computedValue: args.computedValue,
-      format: args.format,
-      formulaError: args.formulaError,
-    }),
-    textDecorationLine: args.format?.underline ? "underline" : "none",
-  };
-}
-
-function areArraysEqual(left: number[], right: number[]) {
-  return (
-    left.length === right.length &&
-    left.every((value, index) => right[index] === value)
-  );
-}
-
-function areRecordsEqual(left: unknown, right: unknown) {
-  return JSON.stringify(left) === JSON.stringify(right);
-}
-
-function collectKeyedChanges<T>(args: {
-  next: Map<string, T>;
-  previous: Map<string, T>;
-}) {
-  const changes: KeyedChange<T>[] = [];
-
-  for (const [key, value] of args.next) {
-    if (!areRecordsEqual(args.previous.get(key), value)) {
-      changes.push({
-        key,
-        value,
-      });
-    }
-  }
-
-  for (const key of args.previous.keys()) {
-    if (!args.next.has(key)) {
-      changes.push({
-        key,
-        value: null,
-      });
-    }
-  }
-
-  return changes;
-}
-
-function collectNumericChanges(args: {
-  next: Map<number, number>;
-  previous: Map<number, number>;
-}) {
-  const changes: NumericChange[] = [];
-
-  for (const [index, value] of args.next) {
-    if (args.previous.get(index) !== value) {
-      changes.push({
-        index,
-        value,
-      });
-    }
-  }
-
-  for (const index of args.previous.keys()) {
-    if (!args.next.has(index)) {
-      changes.push({
-        index,
-        value: null,
-      });
-    }
-  }
-
-  return changes;
-}
-
-function getSnapshotChanges(
-  previous: SparseSheetSnapshot,
-  next: SparseSheetSnapshot
-): SnapshotChanges {
-  return {
-    cells: collectKeyedChanges({
-      next: next.cells,
-      previous: previous.cells,
-    }),
-    columnOrderChanged: !areArraysEqual(previous.columnOrder, next.columnOrder),
-    columnWidths: collectNumericChanges({
-      next: next.columnWidths,
-      previous: previous.columnWidths,
-    }),
-    formats: collectKeyedChanges({
-      next: next.formats,
-      previous: previous.formats,
-    }),
-    rowHeights: collectNumericChanges({
-      next: next.rowHeights,
-      previous: previous.rowHeights,
-    }),
-    rowOrderChanged: !areArraysEqual(previous.rowOrder, next.rowOrder),
-  };
-}
-
-function hasSnapshotChanges(
-  changes: SnapshotChanges,
-  previous: SparseSheetSnapshot,
-  next: SparseSheetSnapshot
-) {
-  return (
-    changes.cells.length > 0 ||
-    changes.columnOrderChanged ||
-    changes.columnWidths.length > 0 ||
-    changes.formats.length > 0 ||
-    changes.rowHeights.length > 0 ||
-    changes.rowOrderChanged ||
-    !areArraysEqual(previous.columnOrder, next.columnOrder) ||
-    !areArraysEqual(previous.rowOrder, next.rowOrder)
-  );
-}
-
-function createShortcutLabel(label: string) {
-  return (
-    <span className="font-mono text-[0.7rem] text-[var(--muted)] uppercase tracking-[0.18em]">
-      {label}
-    </span>
-  );
-}
-
-function MenuButton({
-  isOpen,
-  label,
-  onClick,
-}: {
-  isOpen: boolean;
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      className={`rounded-full border px-3 py-1.5 text-[0.76rem] uppercase tracking-[0.18em] transition-colors ${
-        isOpen
-          ? "border-[var(--accent)] bg-[rgba(42,118,130,0.12)] text-[var(--accent)]"
-          : "border-[var(--border)] bg-white/80 text-[var(--muted)] hover:border-[var(--accent)] hover:text-[var(--foreground)]"
-      }`}
-      onClick={onClick}
-      type="button"
-    >
-      {label}
-    </button>
-  );
-}
-
-function MenuItem({
-  checked,
-  disabled,
-  label,
-  onClick,
-  shortcut,
-}: {
-  checked?: boolean;
-  disabled?: boolean;
-  label: string;
-  onClick?: () => void;
-  shortcut?: string;
-}) {
-  return (
-    <button
-      className="flex w-full items-center justify-between gap-4 rounded-[0.95rem] px-3 py-2 text-left text-[var(--foreground)] text-sm transition-colors hover:bg-[rgba(42,118,130,0.08)] disabled:cursor-not-allowed disabled:opacity-50"
-      disabled={disabled}
-      onClick={onClick}
-      type="button"
-    >
-      <span className="flex items-center gap-2">
-        <span className="w-4 text-center text-[var(--accent)]">
-          {checked ? "x" : ""}
-        </span>
-        <span>{label}</span>
-      </span>
-      {shortcut ? createShortcutLabel(shortcut) : null}
-    </button>
-  );
-}
-
-interface ShortcutHandlerArgs {
-  activeCellFormat: CellFormatRecord | null;
-  applyFormattingPatch: (patch: CellFormat) => void;
-  clearSelectionFormatting: () => void;
-  cutSelectionContents: () => Promise<void>;
-  event: KeyboardEvent<HTMLDivElement | HTMLTextAreaElement>;
-  insertColumn: (placement: "left" | "right") => void;
-  insertRow: (placement: "above" | "below") => void;
-  openRenameDialog: () => void;
-  redoSelectionChange: () => void;
-  setActiveHelpPanel: Dispatch<SetStateAction<HelpPanel | null>>;
-  setFreezeFirstColumn: Dispatch<SetStateAction<boolean>>;
-  setFreezeTopRow: Dispatch<SetStateAction<boolean>>;
-  setShowCrosshairHighlight: Dispatch<SetStateAction<boolean>>;
-  setShowFormulaBar: Dispatch<SetStateAction<boolean>>;
-  setShowGridlines: Dispatch<SetStateAction<boolean>>;
-  undoSelectionChange: () => void;
-}
-
-function handleMetaShortcuts(args: ShortcutHandlerArgs) {
-  const isModifierPressed = args.event.metaKey || args.event.ctrlKey;
-  const lowerKey = args.event.key.toLowerCase();
-
-  if (args.event.key === "F2") {
-    args.event.preventDefault();
-    args.openRenameDialog();
-    return true;
-  }
-
-  if (args.event.shiftKey && args.event.key === "?") {
-    args.event.preventDefault();
-    args.setActiveHelpPanel("shortcuts");
-    return true;
-  }
-
-  if (isModifierPressed && lowerKey === "z") {
-    args.event.preventDefault();
-
-    if (args.event.shiftKey) {
-      args.redoSelectionChange();
-      return true;
-    }
-
-    args.undoSelectionChange();
-    return true;
-  }
-
-  if (isModifierPressed && lowerKey === "x") {
-    args.event.preventDefault();
-    args.cutSelectionContents().catch(() => undefined);
-    return true;
-  }
-
-  if (isModifierPressed && lowerKey === "b") {
-    args.event.preventDefault();
-    args.applyFormattingPatch({
-      bold: !args.activeCellFormat?.bold,
-    });
-    return true;
-  }
-
-  if (isModifierPressed && lowerKey === "i") {
-    args.event.preventDefault();
-    args.applyFormattingPatch({
-      italic: !args.activeCellFormat?.italic,
-    });
-    return true;
-  }
-
-  if (isModifierPressed && lowerKey === "u") {
-    args.event.preventDefault();
-    args.applyFormattingPatch({
-      underline: !args.activeCellFormat?.underline,
-    });
-    return true;
-  }
-
-  if (isModifierPressed && args.event.key === "/") {
-    args.event.preventDefault();
-    args.setShowFormulaBar((current) => !current);
-    return true;
-  }
-
-  return false;
-}
-
-function handleViewShortcuts(args: ShortcutHandlerArgs) {
-  const lowerKey = args.event.key.toLowerCase();
-
-  if (args.event.altKey && args.event.shiftKey && lowerKey === "t") {
-    args.event.preventDefault();
-    args.setFreezeTopRow((current) => !current);
-    return true;
-  }
-
-  if (args.event.altKey && args.event.shiftKey && args.event.key === "1") {
-    args.event.preventDefault();
-    args.setFreezeFirstColumn((current) => !current);
-    return true;
-  }
-
-  if (args.event.altKey && lowerKey === "g") {
-    args.event.preventDefault();
-    args.setShowGridlines((current) => !current);
-    return true;
-  }
-
-  if (args.event.altKey && lowerKey === "h") {
-    args.event.preventDefault();
-    args.setShowCrosshairHighlight((current) => !current);
-    return true;
-  }
-
-  return false;
-}
-
-function handleFormatAndInsertShortcuts(args: ShortcutHandlerArgs) {
-  const lowerKey = args.event.key.toLowerCase();
-
-  if (args.event.altKey && args.event.shiftKey && lowerKey === "l") {
-    args.event.preventDefault();
-    args.applyFormattingPatch({
-      align: args.activeCellFormat?.align === "left" ? undefined : "left",
-    });
-    return true;
-  }
-
-  if (args.event.altKey && args.event.shiftKey && lowerKey === "e") {
-    args.event.preventDefault();
-    args.applyFormattingPatch({
-      align: args.activeCellFormat?.align === "center" ? undefined : "center",
-    });
-    return true;
-  }
-
-  if (args.event.altKey && args.event.shiftKey && lowerKey === "r") {
-    args.event.preventDefault();
-    args.applyFormattingPatch({
-      align: args.activeCellFormat?.align === "right" ? undefined : "right",
-    });
-    return true;
-  }
-
-  if (args.event.altKey && args.event.shiftKey && lowerKey === "x") {
-    args.event.preventDefault();
-    args.clearSelectionFormatting();
-    return true;
-  }
-
-  return false;
-}
-
-function handleInsertShortcuts(args: ShortcutHandlerArgs) {
-  if (
-    args.event.altKey &&
-    args.event.shiftKey &&
-    args.event.key === "ArrowUp"
-  ) {
-    args.event.preventDefault();
-    args.insertRow("above");
-    return true;
-  }
-
-  if (
-    args.event.altKey &&
-    args.event.shiftKey &&
-    args.event.key === "ArrowDown"
-  ) {
-    args.event.preventDefault();
-    args.insertRow("below");
-    return true;
-  }
-
-  if (
-    args.event.altKey &&
-    args.event.shiftKey &&
-    args.event.key === "ArrowLeft"
-  ) {
-    args.event.preventDefault();
-    args.insertColumn("left");
-    return true;
-  }
-
-  if (
-    args.event.altKey &&
-    args.event.shiftKey &&
-    args.event.key === "ArrowRight"
-  ) {
-    args.event.preventDefault();
-    args.insertColumn("right");
-    return true;
-  }
-
-  return false;
-}
-
-interface NavigationHandlerArgs {
-  activeCell: CellAddress;
-  applySelection: (selection: Selection) => void;
-  bounds: SheetBounds;
-  clearSelectionContents: () => void;
-  columnLayout: import("@/types/spreadsheet").AxisLayout;
-  event: KeyboardEvent<HTMLDivElement | HTMLTextAreaElement>;
-  rowLayout: import("@/types/spreadsheet").AxisLayout;
-  selection: Selection;
-  startEditing: (address: CellAddress, initialValue?: string) => void;
-}
-
-function handleNavigationShortcuts(args: NavigationHandlerArgs) {
-  if (
-    args.event.key === "ArrowDown" ||
-    args.event.key === "ArrowLeft" ||
-    args.event.key === "ArrowRight" ||
-    args.event.key === "ArrowUp" ||
-    args.event.key === "Enter" ||
-    args.event.key === "Tab"
-  ) {
-    args.event.preventDefault();
-    const delta = getNavigationDelta(args.event.key, args.event.shiftKey);
-    const nextAddress = moveCellAddressInLayout(
-      args.activeCell,
-      delta,
-      args.bounds,
-      args.columnLayout,
-      args.rowLayout
-    );
-
-    args.applySelection(
-      args.event.shiftKey
-        ? extendSelection(args.selection, nextAddress)
-        : createCellSelection(nextAddress)
-    );
-    return true;
-  }
-
-  if (args.event.key === "Backspace" || args.event.key === "Delete") {
-    args.event.preventDefault();
-    args.clearSelectionContents();
-    return true;
-  }
-
-  if (args.event.key === "Escape") {
-    args.event.preventDefault();
-    args.applySelection(createCellSelection(args.activeCell));
-    return true;
-  }
-
-  if (isPrintableCellInput(args.event)) {
-    args.event.preventDefault();
-    args.startEditing(args.activeCell, args.event.key);
-    return true;
-  }
-
-  return false;
-}
-
-function formatWriteState(writeState: WriteState) {
-  switch (writeState) {
-    case "saving":
-      return "Saving...";
-    case "saved":
-      return "Saved";
-    case "reconnecting":
-      return "Reconnecting...";
-    case "offline":
-      return "Offline";
-    default:
-      return "Idle";
-  }
-}
-
-function sanitizeFileName(value: string) {
-  return value
-    .toLowerCase()
-    .replaceAll(/[^a-z0-9]+/gu, "-")
-    .replaceAll(/^-|-$/gu, "");
-}
-
-function downloadExport(filename: string, content: string, mimeType: string) {
-  if (typeof window === "undefined") {
-    return;
-  }
-
-  const blob = new Blob([content], { type: mimeType });
-  const url = window.URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-
-  anchor.href = url;
-  anchor.download = filename;
-  anchor.click();
-
-  window.setTimeout(() => {
-    window.URL.revokeObjectURL(url);
-  }, 0);
-}
-
-function captureLayoutState(sheet: SparseSheet) {
-  return {
-    columnOrder: sheet.getColumnOrder(),
-    columnWidths: sheet.getColumnWidths(),
-    rowHeights: sheet.getRowHeights(),
-    rowOrder: sheet.getRowOrder(),
-  };
-}
-
-function applyRemoteChanges(args: {
-  batchUpsert: (cells: Array<{ key: string; raw: string }>) => void;
-  changes: CollaborationSheetChangeSet;
-  deleteCell: (key: string) => void;
-  markCellsDirty: () => void;
-  markLayoutDirty: () => void;
-  sheet: SparseSheet;
-}) {
-  let didCellChange = false;
-  let didLayoutChange = false;
-  const formulaUpserts: Array<{ key: string; raw: string }> = [];
-
-  for (const change of args.changes.cells) {
-    if (change.value === null) {
-      didCellChange = args.sheet.clearCellByKey(change.key) || didCellChange;
-      args.deleteCell(change.key);
-      continue;
-    }
-
-    args.sheet.setCellByKey(change.key, change.value);
-    formulaUpserts.push({
-      key: change.key,
-      raw: change.value.raw,
-    });
-    didCellChange = true;
-  }
-
-  for (const change of args.changes.formats) {
-    if (change.value === null) {
-      didCellChange =
-        args.sheet.clearCellFormat(parseCellKey(change.key)) || didCellChange;
-      continue;
-    }
-
-    args.sheet.setCellFormatByKey(change.key, change.value);
-    didCellChange = true;
-  }
-
-  for (const change of args.changes.columnWidths) {
-    args.sheet.setColumnWidth(change.index, change.value);
-    didLayoutChange = true;
-  }
-
-  for (const change of args.changes.rowHeights) {
-    args.sheet.setRowHeight(change.index, change.value);
-    didLayoutChange = true;
-  }
-
-  if (args.changes.columnOrder) {
-    args.sheet.setColumnOrder(args.changes.columnOrder);
-    didLayoutChange = true;
-  }
-
-  if (args.changes.rowOrder) {
-    args.sheet.setRowOrder(args.changes.rowOrder);
-    didLayoutChange = true;
-  }
-
-  if (formulaUpserts.length > 0) {
-    args.batchUpsert(formulaUpserts);
-  }
-
-  if (didCellChange) {
-    args.markCellsDirty();
-  }
-
-  if (didLayoutChange) {
-    args.markLayoutDirty();
-  }
-}
-
-function commitHeaderDrag(args: {
-  applyColumnOrder: (order: number[], sync?: boolean) => void;
-  applyRowOrder: (order: number[], sync?: boolean) => void;
-  headerDragState: HeaderDragState;
-  scheduleWriteConfirmation: () => void;
-  setColumnWidth: (column: number, width: number | null) => void;
-  setRowHeight: (row: number, height: number | null) => void;
-  sheet: SparseSheet;
-  syncDocumentTimestamp: () => void;
-}) {
-  if (args.headerDragState.type === "resize") {
-    if (args.headerDragState.axis === "col") {
-      const width = args.sheet.getColumnWidth(
-        args.headerDragState.logicalIndex
-      );
-
-      if (width != null) {
-        args.setColumnWidth(args.headerDragState.logicalIndex, width);
-        args.scheduleWriteConfirmation();
-        args.syncDocumentTimestamp();
-      }
-
-      return;
-    }
-
-    const height = args.sheet.getRowHeight(args.headerDragState.logicalIndex);
-
-    if (height != null) {
-      args.setRowHeight(args.headerDragState.logicalIndex, height);
-      args.scheduleWriteConfirmation();
-      args.syncDocumentTimestamp();
-    }
-
-    return;
-  }
-
-  if (
-    args.headerDragState.sourceLogicalIndex ===
-    args.headerDragState.targetLogicalIndex
-  ) {
-    return;
-  }
-
-  if (args.headerDragState.axis === "col") {
-    args.applyColumnOrder(
-      moveAxisItem(
-        args.sheet.getColumnOrder(),
-        args.headerDragState.sourceLogicalIndex,
-        args.headerDragState.targetLogicalIndex
-      ),
-      true
-    );
-    return;
-  }
-
-  args.applyRowOrder(
-    moveAxisItem(
-      args.sheet.getRowOrder(),
-      args.headerDragState.sourceLogicalIndex,
-      args.headerDragState.targetLogicalIndex
-    ),
-    true
-  );
-}
-
-function useVirtualViewport() {
-  const scrollRef = useRef<HTMLDivElement | null>(null);
-  const frameRef = useRef<number | null>(null);
-  const pendingScrollRef = useRef({
-    scrollX: 0,
-    scrollY: 0,
-  });
-  const [viewport, setViewport] = useState<Viewport>(() =>
-    getViewportFromScroll({
-      scrollX: 0,
-      scrollY: 0,
-      viewportHeight: DEFAULT_VIEWPORT_HEIGHT,
-      viewportWidth: DEFAULT_VIEWPORT_WIDTH,
-    })
-  );
-
-  useEffect(() => {
-    const node = scrollRef.current;
-
-    if (!node) {
-      return;
-    }
-
-    const updateViewport = (
-      nextScrollX: number,
-      nextScrollY: number,
-      nextWidth: number,
-      nextHeight: number
-    ) => {
-      startTransition(() => {
-        setViewport(
-          getViewportFromScroll({
-            scrollX: nextScrollX,
-            scrollY: nextScrollY,
-            viewportHeight: nextHeight,
-            viewportWidth: nextWidth,
-          })
-        );
-      });
-    };
-
-    updateViewport(0, 0, node.clientWidth, node.clientHeight);
-
-    const resizeObserver = new ResizeObserver(() => {
-      updateViewport(
-        pendingScrollRef.current.scrollX,
-        pendingScrollRef.current.scrollY,
-        node.clientWidth,
-        node.clientHeight
-      );
-    });
-
-    resizeObserver.observe(node);
-
-    return () => {
-      resizeObserver.disconnect();
-
-      if (frameRef.current !== null) {
-        cancelAnimationFrame(frameRef.current);
-      }
-    };
-  }, []);
-
-  const handleScroll = () => {
-    const node = scrollRef.current;
-
-    if (!node) {
-      return;
-    }
-
-    pendingScrollRef.current = {
-      scrollX: node.scrollLeft,
-      scrollY: node.scrollTop,
-    };
-
-    if (frameRef.current !== null) {
-      return;
-    }
-
-    frameRef.current = requestAnimationFrame(() => {
-      frameRef.current = null;
-      startTransition(() => {
-        setViewport(
-          getViewportFromScroll({
-            scrollX: pendingScrollRef.current.scrollX,
-            scrollY: pendingScrollRef.current.scrollY,
-            viewportHeight: node.clientHeight,
-            viewportWidth: node.clientWidth,
-          })
-        );
-      });
-    });
-  };
-
-  return {
-    handleScroll,
-    scrollRef,
-    viewport,
-  };
-}
-
-function VirtualCell({
-  address,
-  columnLayout,
-  computedValue,
-  displayLeft,
-  displayTop,
-  format,
-  formulaError,
-  isActive,
-  isFrozen,
-  isGridlinesVisible,
-  isSelected,
-  record,
-  rowLayout,
-}: {
-  address: CellAddress;
-  columnLayout: import("@/types/spreadsheet").AxisLayout;
-  computedValue: ComputedValue | undefined;
-  displayLeft?: number;
-  displayTop?: number;
-  format: CellFormatRecord | null;
-  formulaError: string | undefined;
-  isActive: boolean;
-  isFrozen?: boolean;
-  isGridlinesVisible?: boolean;
-  isSelected: boolean;
-  record: CellRecord | null;
-  rowLayout: import("@/types/spreadsheet").AxisLayout;
-}) {
-  const layout = getCellLayout(address, columnLayout, rowLayout);
-  const displayValue = getRenderedCellValue({
-    cell: record,
-    computedValue,
-    formulaError,
-  });
-
-  return (
-    <div
-      className={`absolute overflow-hidden px-3 py-2 text-[0.92rem] leading-6 ${
-        isGridlinesVisible === false
-          ? ""
-          : "border-[var(--border)] border-r border-b"
-      }`}
-      style={{
-        height: layout.height,
-        left: displayLeft ?? layout.left,
-        top: displayTop ?? layout.top,
-        width: layout.width,
-        zIndex: isFrozen ? 12 : undefined,
-        ...getCellContentStyle({
-          cell: record,
-          computedValue,
-          format,
-          formulaError,
-          isActive,
-          isSelected,
-        }),
-      }}
-      title={formulaError}
-    >
-      <div className="truncate">{displayValue}</div>
-    </div>
-  );
-}
-
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the editor composes menu actions, virtualization, and collaboration in one client boundary.
 export function VirtualizedSheet({
   document,
+  onCollaborationSnapshotChange,
   onDocumentUpdated,
   onWriteStateChange,
   session,
 }: {
   document: DocumentMeta;
+  onCollaborationSnapshotChange?: (
+    snapshot: CollaborationPresenceSnapshot
+  ) => void;
   onDocumentUpdated?: Dispatch<SetStateAction<DocumentMeta | null>>;
   onWriteStateChange?: (writeState: WriteState) => void;
   session: SessionIdentity | null;
@@ -1110,7 +166,7 @@ export function VirtualizedSheet({
   const [selection, setSelection] = useState<Selection>(() =>
     createCellSelection(DEFAULT_SELECTION)
   );
-  const [editorMode, setEditorMode] = useState<EditorMode>("view");
+  const [, setEditorMode] = useState<EditorMode>("view");
   const [editingAddress, setEditingAddress] = useState<CellAddress | null>(
     null
   );
@@ -1191,17 +247,6 @@ export function VirtualizedSheet({
   );
   const visibleColumns = visibleColumnsSlice.items;
   const visibleRows = visibleRowsSlice.items;
-  const visibleWindow = getVisibleWindow(
-    {
-      ...viewport,
-      colEnd: visibleColumnsSlice.visualEnd,
-      colStart: visibleColumnsSlice.visualStart,
-      overscan: DEFAULT_SHEET_METRICS.overscan,
-      rowEnd: visibleRowsSlice.visualEnd,
-      rowStart: visibleRowsSlice.visualStart,
-    },
-    bounds
-  );
   const selectionMembers = useMemo(
     () => getSelectionMembers(selection, columnLayout, rowLayout),
     [columnLayout, rowLayout, selection]
@@ -1318,6 +363,22 @@ export function VirtualizedSheet({
     selection,
     session,
   });
+
+  useEffect(() => {
+    onCollaborationSnapshotChange?.({
+      activeCell: activeCellKey,
+      lastRemoteLatencyMs,
+      peers,
+      status,
+    });
+  }, [
+    activeCellKey,
+    lastRemoteLatencyMs,
+    onCollaborationSnapshotChange,
+    peers,
+    status,
+  ]);
+
   const closeMenus = () => {
     setActiveMenu(null);
   };
@@ -2467,7 +1528,7 @@ export function VirtualizedSheet({
       : activeCellRaw;
 
   return (
-    <section className="relative flex h-full min-h-0 flex-col overflow-hidden rounded-[1.75rem] border border-[var(--border)] bg-white/82 shadow-[0_18px_48px_rgba(15,23,42,0.08)]">
+    <section className="relative flex h-full min-h-0 flex-col overflow-hidden bg-[#ffffff]">
       <textarea
         aria-label="Spreadsheet keyboard input"
         autoFocus
@@ -2485,12 +1546,9 @@ export function VirtualizedSheet({
         value=""
       />
 
-      <div
-        className="relative border-[var(--border)] border-b bg-[rgba(248,250,251,0.94)] px-4 py-3"
-        data-menu-root
-      >
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-2">
+      <div className="relative bg-white px-2 py-0.5" data-menu-root>
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-0.5">
             {(
               ["file", "edit", "view", "insert", "format", "help"] as const
             ).map((menuKey) => (
@@ -2506,16 +1564,22 @@ export function VirtualizedSheet({
               />
             ))}
           </div>
-          <div className="flex flex-wrap items-center gap-3 text-[0.72rem] text-[var(--muted)] uppercase tracking-[0.18em]">
-            <span className="font-mono">F2 rename</span>
-            <span className="font-mono">? shortcuts</span>
+          <div className="flex items-center gap-3 pr-1 text-[#80868b] text-[0.6875rem]">
+            <span className="font-mono text-[#5f6368]">
+              {getColumnHeaderLabel(activeCell.col)}
+              {activeCell.row}
+            </span>
+            <span className="font-mono">
+              {selectionDimensions.rowCount} x {selectionDimensions.colCount}
+            </span>
+            <span className="font-mono">{formatWriteState(writeState)}</span>
           </div>
         </div>
 
         {activeMenu ? (
-          <div className="absolute inset-x-4 top-full z-40 mt-2 rounded-[1.25rem] border border-[var(--border)] bg-white/96 p-3 shadow-[0_22px_60px_rgba(15,23,42,0.14)] backdrop-blur">
+          <div className="absolute top-full left-2 z-40 mt-0.5 min-w-[17rem] rounded-lg border border-[#e0e0e0] bg-white py-1.5 shadow-[0_2px_6px_2px_rgba(60,64,67,0.15),0_1px_2px_rgba(60,64,67,0.3)]">
             {activeMenu === "file" ? (
-              <div className="grid gap-1">
+              <div className="grid gap-0.5 px-1">
                 <MenuItem
                   label="Export CSV"
                   onClick={() => {
@@ -2552,7 +1616,7 @@ export function VirtualizedSheet({
             ) : null}
 
             {activeMenu === "edit" ? (
-              <div className="grid gap-1">
+              <div className="grid gap-0.5 px-1">
                 <MenuItem
                   disabled={historyRef.current.past.length === 0}
                   label="Undo"
@@ -2615,7 +1679,7 @@ export function VirtualizedSheet({
             ) : null}
 
             {activeMenu === "view" ? (
-              <div className="grid gap-1">
+              <div className="grid gap-0.5 px-1">
                 <MenuItem
                   checked={showFormulaBar}
                   label="Show formula bar"
@@ -2665,7 +1729,7 @@ export function VirtualizedSheet({
             ) : null}
 
             {activeMenu === "insert" ? (
-              <div className="grid gap-1">
+              <div className="grid gap-0.5 px-1">
                 <MenuItem
                   label="Row above"
                   onClick={() => {
@@ -2702,12 +1766,12 @@ export function VirtualizedSheet({
             ) : null}
 
             {activeMenu === "format" ? (
-              <div className="grid gap-3">
-                <div className="flex flex-wrap items-center gap-3 rounded-[1rem] border border-[var(--border)] bg-[rgba(248,250,251,0.92)] px-3 py-3">
-                  <label className="flex items-center gap-2 text-sm">
-                    <span>Font</span>
+              <div className="grid gap-2 px-1">
+                <div className="flex flex-wrap items-center gap-3 rounded border border-[#e0e0e0] bg-[#f8f9fa] px-3 py-2.5">
+                  <label className="flex items-center gap-2 text-[0.8125rem]">
+                    <span className="text-[#5f6368]">Font</span>
                     <select
-                      className="rounded-full border border-[var(--border)] bg-white px-3 py-1.5 text-sm outline-none"
+                      className="rounded border border-[#dadce0] bg-white px-3 py-1 text-[0.8125rem] outline-none"
                       onChange={(event) => {
                         const nextFontFamily = event.target.value;
 
@@ -2728,10 +1792,10 @@ export function VirtualizedSheet({
                       ))}
                     </select>
                   </label>
-                  <label className="flex items-center gap-2 text-sm">
-                    <span>Size</span>
+                  <label className="flex items-center gap-2 text-[0.8125rem]">
+                    <span className="text-[#5f6368]">Size</span>
                     <select
-                      className="rounded-full border border-[var(--border)] bg-white px-3 py-1.5 text-sm outline-none"
+                      className="rounded border border-[#dadce0] bg-white px-3 py-1 text-[0.8125rem] outline-none"
                       onChange={(event) => {
                         const nextFontSize = event.target.value;
 
@@ -2752,10 +1816,10 @@ export function VirtualizedSheet({
                       ))}
                     </select>
                   </label>
-                  <label className="flex items-center gap-2 text-sm">
-                    <span>Text</span>
+                  <label className="flex items-center gap-2 text-[0.8125rem]">
+                    <span className="text-[#5f6368]">Text</span>
                     <input
-                      className="h-8 w-10 rounded-md border border-[var(--border)]"
+                      className="h-7 w-9 rounded border border-[#dadce0]"
                       onChange={(event) => {
                         applyFormattingPatch({
                           textColor: event.target.value,
@@ -2765,10 +1829,10 @@ export function VirtualizedSheet({
                       value={activeCellFormat?.textColor ?? "#172333"}
                     />
                   </label>
-                  <label className="flex items-center gap-2 text-sm">
-                    <span>Fill</span>
+                  <label className="flex items-center gap-2 text-[0.8125rem]">
+                    <span className="text-[#5f6368]">Fill</span>
                     <input
-                      className="h-8 w-10 rounded-md border border-[var(--border)]"
+                      className="h-7 w-9 rounded border border-[#dadce0]"
                       onChange={(event) => {
                         applyFormattingPatch({
                           backgroundColor: event.target.value,
@@ -2779,7 +1843,7 @@ export function VirtualizedSheet({
                     />
                   </label>
                 </div>
-                <div className="grid gap-1">
+                <div className="grid gap-0.5">
                   <MenuItem
                     checked={Boolean(activeCellFormat?.bold)}
                     label="Bold"
@@ -2860,7 +1924,7 @@ export function VirtualizedSheet({
             ) : null}
 
             {activeMenu === "help" ? (
-              <div className="grid gap-1">
+              <div className="grid gap-0.5 px-1">
                 <MenuItem
                   label="Keyboard shortcuts"
                   onClick={() => {
@@ -2889,52 +1953,20 @@ export function VirtualizedSheet({
         ) : null}
       </div>
 
-      <div className="flex items-center justify-between border-[var(--border)] border-b bg-[rgba(247,249,250,0.92)] px-4 py-3 text-[0.72rem] text-[var(--muted)] uppercase tracking-[0.18em]">
-        <div className="flex flex-wrap items-center gap-3">
-          <span className="rounded-full bg-[rgba(42,118,130,0.08)] px-3 py-1 font-mono text-[var(--accent)]">
-            {editorMode === "view" ? "Active" : editorMode}{" "}
-            {getColumnHeaderLabel(activeCell.col)}
-            {activeCell.row}
-          </span>
-          <span className="font-mono">
-            Visible rows {visibleWindow.rowStart}-{visibleWindow.rowEnd}
-          </span>
-          <span className="font-mono">
-            Selection {selectionDimensions.rowCount}x
-            {selectionDimensions.colCount}
-          </span>
-          <span className="font-mono">Drag grips reorder. Edges resize.</span>
-        </div>
-        <div className="flex flex-wrap items-center gap-3 font-mono">
-          <span>{isReady ? "Formulas ready" : "Formulas warming"}</span>
-          <span>{status}</span>
-          {lastRemoteLatencyMs != null ? (
-            <span>remote {lastRemoteLatencyMs}ms</span>
-          ) : null}
-          {peers.length > 0 ? (
-            <span>
-              {peers.length} collaborator{peers.length === 1 ? "" : "s"}
-            </span>
-          ) : null}
-          <span>{formatWriteState(writeState)}</span>
-          <span>{bounds.rowCount.toLocaleString()} rows</span>
-          <span>{bounds.colCount.toLocaleString()} cols</span>
-          <span>{sheet.cellCount.toLocaleString()} populated</span>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-[5.5rem_minmax(0,1fr)] items-center gap-3 border-[var(--border)] border-b bg-[linear-gradient(180deg,_rgba(252,253,253,0.98),_rgba(246,249,250,0.94))] px-4 py-3">
-        <div className="rounded-[1rem] border border-[rgba(42,118,130,0.16)] bg-[rgba(42,118,130,0.06)] px-3 py-2 font-mono text-[0.82rem] text-[var(--accent)] uppercase tracking-[0.22em]">
-          fx {getColumnHeaderLabel(activeCell.col)}
-          {activeCell.row}
-        </div>
-        <div className="flex min-w-0 flex-col gap-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <label className="flex items-center gap-2 rounded-full border border-[var(--border)] bg-white/80 px-3 py-2 text-sm">
-              Font
+      <div className="border-[#e0e0e0] border-b bg-[linear-gradient(180deg,#f4f7fb_0%,#edf2fa_100%)]">
+        <div className="flex flex-wrap items-center gap-2 px-3 py-2">
+          <div className="flex items-center gap-1 rounded-lg bg-white/92 p-1 shadow-[0_1px_2px_rgba(32,33,36,0.08)] ring-1 ring-[#d6dbe3]">
+            <label
+              className="flex items-center gap-2 rounded-md px-2 py-1 text-[#202124] text-[0.75rem] transition-colors hover:bg-[#f6f8fb]"
+              title="Font family"
+            >
+              <span className="text-[#5f6368]">
+                <FontFamilyIcon />
+              </span>
+              <span className="sr-only">Font family</span>
               <select
                 aria-label="Cell font family"
-                className="rounded-full border border-[var(--border)] bg-transparent px-3 py-1.5 text-sm outline-none"
+                className="min-w-[5.75rem] bg-transparent text-[0.75rem] outline-none"
                 onChange={(event) => {
                   const nextFontFamily = event.target.value;
 
@@ -2955,11 +1987,17 @@ export function VirtualizedSheet({
                 ))}
               </select>
             </label>
-            <label className="flex items-center gap-2 rounded-full border border-[var(--border)] bg-white/80 px-3 py-2 text-sm">
-              Size
+            <label
+              className="flex items-center gap-2 rounded-md px-2 py-1 text-[#202124] text-[0.75rem] transition-colors hover:bg-[#f6f8fb]"
+              title="Font size"
+            >
+              <span className="text-[#5f6368]">
+                <FontSizeIcon />
+              </span>
+              <span className="sr-only">Font size</span>
               <select
                 aria-label="Cell font size"
-                className="rounded-full border border-[var(--border)] bg-transparent px-3 py-1.5 text-sm outline-none"
+                className="w-11 bg-transparent text-[0.75rem] outline-none"
                 onChange={(event) => {
                   const nextFontSize = event.target.value;
 
@@ -2980,7 +2018,11 @@ export function VirtualizedSheet({
                 ))}
               </select>
             </label>
+          </div>
+
+          <div className="flex items-center gap-1 rounded-lg bg-white/92 p-1 shadow-[0_1px_2px_rgba(32,33,36,0.08)] ring-1 ring-[#d6dbe3]">
             <button
+              aria-label="Bold"
               className={getToolbarButtonClassName(
                 Boolean(activeCellFormat?.bold)
               )}
@@ -2989,11 +2031,13 @@ export function VirtualizedSheet({
                   bold: !activeCellFormat?.bold,
                 });
               }}
+              title="Bold"
               type="button"
             >
-              Bold
+              <span className="font-black text-[0.82rem]">B</span>
             </button>
             <button
+              aria-label="Italic"
               className={getToolbarButtonClassName(
                 Boolean(activeCellFormat?.italic)
               )}
@@ -3002,11 +2046,13 @@ export function VirtualizedSheet({
                   italic: !activeCellFormat?.italic,
                 });
               }}
+              title="Italic"
               type="button"
             >
-              Italic
+              <span className="text-[0.82rem] italic">I</span>
             </button>
             <button
+              aria-label="Underline"
               className={getToolbarButtonClassName(
                 Boolean(activeCellFormat?.underline)
               )}
@@ -3015,152 +2061,176 @@ export function VirtualizedSheet({
                   underline: !activeCellFormat?.underline,
                 });
               }}
+              title="Underline"
               type="button"
             >
-              Underline
+              <span className="text-[0.82rem] underline decoration-[1.5px] underline-offset-[2px]">
+                U
+              </span>
             </button>
-            <label className="flex items-center gap-2 rounded-full border border-[var(--border)] bg-white/80 px-3 py-2 text-sm">
-              Text
+          </div>
+
+          <div className="flex items-center gap-1 rounded-lg bg-white/92 p-1 shadow-[0_1px_2px_rgba(32,33,36,0.08)] ring-1 ring-[#d6dbe3]">
+            <label
+              className="flex items-center gap-2 rounded-md px-2 py-1 text-[#202124] text-[0.75rem] transition-colors hover:bg-[#f6f8fb]"
+              title="Text color"
+            >
+              <span className="text-[#5f6368]">
+                <TextColorIcon />
+              </span>
+              <span
+                aria-hidden="true"
+                className="h-3 w-3 rounded-full border border-[#c5c9ce]"
+                style={{
+                  backgroundColor: activeCellFormat?.textColor ?? "#172333",
+                }}
+              />
+              <span className="sr-only">Text color</span>
               <input
                 aria-label="Cell text color"
-                className="h-7 w-10 rounded-md border border-[var(--border)]"
+                className="h-6 w-7 cursor-pointer rounded border-none bg-transparent p-0"
                 onChange={(event) => {
                   applyFormattingPatch({
                     textColor: event.target.value,
                   });
                 }}
+                title="Text color"
                 type="color"
                 value={activeCellFormat?.textColor ?? "#172333"}
               />
             </label>
-            <label className="flex items-center gap-2 rounded-full border border-[var(--border)] bg-white/80 px-3 py-2 text-sm">
-              Fill
+            <label
+              className="flex items-center gap-2 rounded-md px-2 py-1 text-[#202124] text-[0.75rem] transition-colors hover:bg-[#f6f8fb]"
+              title="Fill color"
+            >
+              <span className="text-[#5f6368]">
+                <FillColorIcon />
+              </span>
+              <span
+                aria-hidden="true"
+                className="h-3 w-3 rounded-full border border-[#c5c9ce]"
+                style={{
+                  backgroundColor:
+                    activeCellFormat?.backgroundColor ?? "#ffffff",
+                }}
+              />
+              <span className="sr-only">Fill color</span>
               <input
                 aria-label="Cell fill color"
-                className="h-7 w-10 rounded-md border border-[var(--border)]"
+                className="h-6 w-7 cursor-pointer rounded border-none bg-transparent p-0"
                 onChange={(event) => {
                   applyFormattingPatch({
                     backgroundColor: event.target.value,
                   });
                 }}
+                title="Fill color"
                 type="color"
                 value={activeCellFormat?.backgroundColor ?? "#ffffff"}
               />
             </label>
-            <div className="flex items-center gap-1 rounded-full border border-[var(--border)] bg-white/80 p-1">
-              {(["left", "center", "right"] as const).map((alignment) => (
-                <button
-                  className={getToolbarButtonClassName(
-                    activeCellAlignment === alignment
-                  )}
-                  key={alignment}
-                  onClick={() => {
-                    applyFormattingPatch({
-                      align:
-                        activeCellFormat?.align === alignment
-                          ? undefined
-                          : alignment,
-                    });
-                  }}
-                  type="button"
-                >
-                  {getAlignmentLabel(alignment)}
-                </button>
-              ))}
-            </div>
-            <button
-              className="rounded-full border border-[var(--border)] bg-white/80 px-3 py-2 text-sm"
-              onClick={() => {
-                handleExport("csv");
-              }}
-              type="button"
-            >
-              Export CSV
-            </button>
-            <button
-              className="rounded-full border border-[var(--border)] bg-white/80 px-3 py-2 text-sm"
-              onClick={() => {
-                handleExport("tsv");
-              }}
-              type="button"
-            >
-              Export TSV
-            </button>
-            <button
-              className="rounded-full border border-[var(--border)] bg-white/80 px-3 py-2 text-sm"
-              onClick={() => {
-                handleExport("json");
-              }}
-              type="button"
-            >
-              Export JSON
-            </button>
           </div>
-          {showFormulaBar ? (
-            <div className="flex items-center gap-3 rounded-[1.15rem] border border-[var(--border)] bg-white/88 px-4 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]">
-              <span className="font-mono text-[0.78rem] text-[var(--muted)] uppercase tracking-[0.24em]">
-                Formula
-              </span>
-              <input
-                className="h-9 w-full bg-transparent text-[0.96rem] text-[var(--foreground)] outline-none placeholder:text-[var(--muted)]"
-                onBlur={() => {
-                  if (editingSurface === "formula-bar") {
-                    commitEditing({
-                      nextSelection: createCellSelection(activeCell),
-                    });
-                  }
-                }}
-                onChange={(event) => {
-                  if (
-                    editingAddress == null ||
-                    editingSurface !== "formula-bar"
-                  ) {
-                    setEditingAddress(activeCell);
-                    setEditingSurface("formula-bar");
-                  }
 
-                  setDraftValue(event.target.value);
-                  setEditorMode(
-                    event.target.value.startsWith("=") ? "formula" : "edit"
-                  );
+          <div className="flex items-center gap-1 rounded-lg bg-white/92 p-1 shadow-[0_1px_2px_rgba(32,33,36,0.08)] ring-1 ring-[#d6dbe3]">
+            {(
+              [
+                {
+                  alignment: "left" as const,
+                  icon: <AlignLeftIcon />,
+                  label: "Align left",
+                },
+                {
+                  alignment: "center" as const,
+                  icon: <AlignCenterIcon />,
+                  label: "Align center",
+                },
+                {
+                  alignment: "right" as const,
+                  icon: <AlignRightIcon />,
+                  label: "Align right",
+                },
+              ] as const
+            ).map(({ alignment, icon, label }) => (
+              <button
+                aria-label={label}
+                className={getToolbarButtonClassName(
+                  activeCellAlignment === alignment
+                )}
+                key={alignment}
+                onClick={() => {
+                  applyFormattingPatch({
+                    align:
+                      activeCellFormat?.align === alignment
+                        ? undefined
+                        : alignment,
+                  });
                 }}
-                onFocus={handleFormulaBarFocus}
-                onKeyDown={handleFormulaBarKeyDown}
-                placeholder="Type a value or formula like =SUM(A5:B5)"
-                ref={formulaBarRef}
-                value={formulaBarValue}
-              />
-              <div className="flex flex-wrap items-center gap-2">
-                {peers.map((peer) => (
-                  <span
-                    className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-[rgba(248,250,251,0.92)] px-3 py-1 text-[0.78rem] text-[var(--foreground)]"
-                    key={peer.userId}
-                  >
-                    <span
-                      className="h-2.5 w-2.5 rounded-full"
-                      style={{ backgroundColor: peer.color }}
-                    />
-                    {peer.displayName}
-                  </span>
-                ))}
-              </div>
-            </div>
-          ) : null}
+                title={label}
+                type="button"
+              >
+                {icon}
+              </button>
+            ))}
+          </div>
         </div>
+        {showFormulaBar ? (
+          <div className="grid grid-cols-[5rem_2rem_minmax(0,1fr)_auto] items-center gap-0 border-[#e0e0e0] border-t">
+            <div className="flex h-full items-center border-[#e0e0e0] border-r px-3 font-mono text-[#202124] text-[0.75rem]">
+              {getColumnHeaderLabel(activeCell.col)}
+              {activeCell.row}
+            </div>
+            <div className="flex h-full items-center justify-center border-[#e0e0e0] border-r text-[#80868b] text-[0.75rem] italic">
+              fx
+            </div>
+            <input
+              className="h-8 w-full bg-transparent px-2.5 text-[#202124] text-[0.8125rem] outline-none placeholder:text-[#9aa0a6]"
+              onBlur={() => {
+                if (editingSurface === "formula-bar") {
+                  commitEditing({
+                    nextSelection: createCellSelection(activeCell),
+                  });
+                }
+              }}
+              onChange={(event) => {
+                if (
+                  editingAddress == null ||
+                  editingSurface !== "formula-bar"
+                ) {
+                  setEditingAddress(activeCell);
+                  setEditingSurface("formula-bar");
+                }
+
+                setDraftValue(event.target.value);
+                setEditorMode(
+                  event.target.value.startsWith("=") ? "formula" : "edit"
+                );
+              }}
+              onFocus={handleFormulaBarFocus}
+              onKeyDown={handleFormulaBarKeyDown}
+              placeholder="Type a value or formula"
+              ref={formulaBarRef}
+              value={formulaBarValue}
+            />
+            <div className="flex items-center justify-end gap-2.5 border-[#e0e0e0] border-l px-3 text-[#80868b] text-[0.6875rem]">
+              <span>{isReady ? "Ready" : "Loading"}</span>
+              <span>{status}</span>
+              {lastRemoteLatencyMs != null ? (
+                <span>{lastRemoteLatencyMs}ms</span>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
       </div>
 
-      <div className="grid min-h-0 flex-1 grid-cols-[4.5rem_minmax(0,1fr)] grid-rows-[3rem_minmax(0,1fr)] bg-[linear-gradient(180deg,_rgba(251,252,252,0.95),_rgba(244,247,248,0.92))]">
+      <div className="grid min-h-0 flex-1 grid-cols-[3rem_minmax(0,1fr)] grid-rows-[1.75rem_minmax(0,1fr)] bg-white">
         <div
-          className={`bg-[rgba(236,241,244,0.92)] px-3 py-3 font-mono text-[0.68rem] text-[var(--muted)] uppercase tracking-[0.28em] ${
-            showGridlines ? "border-[var(--border)] border-r border-b" : ""
+          className={`bg-[#f8f9fa] ${
+            showGridlines ? "border-[#e0e0e0] border-r border-b" : ""
           }`}
-        >
-          Grid
-        </div>
+        />
 
         <div
-          className={`relative overflow-hidden bg-[rgba(236,241,244,0.92)] ${
-            showGridlines ? "border-[var(--border)] border-b" : ""
+          className={`relative overflow-hidden bg-[#f8f9fa] ${
+            showGridlines ? "border-[#e0e0e0] border-b" : ""
           }`}
         >
           {visibleColumns.map((column) => {
@@ -3172,7 +2242,7 @@ export function VirtualizedSheet({
             return (
               <div
                 className={`absolute top-0 h-full ${
-                  showGridlines ? "border-[var(--border)] border-r" : ""
+                  showGridlines ? "border-[#e0e0e0] border-r" : ""
                 }`}
                 key={`column-${column}`}
                 style={{
@@ -3180,31 +2250,12 @@ export function VirtualizedSheet({
                     isActiveColumn,
                     isSelectedColumn
                   ),
-                  color: isSelectedColumn
-                    ? "var(--foreground)"
-                    : "var(--muted)",
+                  color: isSelectedColumn ? "#202124" : "#5f6368",
                   left,
                   width: layout.size,
                 }}
               >
-                <div className="flex h-full items-center gap-2 px-2 font-mono text-[0.76rem] uppercase tracking-[0.22em]">
-                  <button
-                    aria-label={`Reorder column ${getColumnHeaderLabel(column)}`}
-                    className="rounded-md px-1 text-[0.8rem] text-[var(--muted)] hover:bg-white/70"
-                    onPointerDown={(event) => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      setHeaderDragState({
-                        axis: "col",
-                        sourceLogicalIndex: column,
-                        targetLogicalIndex: column,
-                        type: "reorder",
-                      });
-                    }}
-                    type="button"
-                  >
-                    ::
-                  </button>
+                <div className="flex h-full select-none items-center justify-center px-1 text-[0.6875rem] leading-none">
                   <span>{getColumnHeaderLabel(column)}</span>
                 </div>
                 <div
@@ -3225,8 +2276,8 @@ export function VirtualizedSheet({
         </div>
 
         <div
-          className={`relative overflow-hidden bg-[rgba(248,249,250,0.92)] ${
-            showGridlines ? "border-[var(--border)] border-r" : ""
+          className={`relative overflow-hidden bg-[#f8f9fa] ${
+            showGridlines ? "border-[#e0e0e0] border-r" : ""
           }`}
         >
           {visibleRows.map((row) => {
@@ -3238,7 +2289,7 @@ export function VirtualizedSheet({
             return (
               <div
                 className={`absolute left-0 ${
-                  showGridlines ? "border-[var(--border)] border-b" : ""
+                  showGridlines ? "border-[#e0e0e0] border-b" : ""
                 }`}
                 key={`row-${row}`}
                 style={{
@@ -3246,30 +2297,13 @@ export function VirtualizedSheet({
                     isActiveRow,
                     isSelectedRow
                   ),
-                  color: isSelectedRow ? "var(--foreground)" : "var(--muted)",
+                  color: isSelectedRow ? "#202124" : "#5f6368",
                   height: layout.size,
                   top,
                   width: "100%",
                 }}
               >
-                <div className="flex h-full items-center gap-2 px-2 font-mono text-[0.75rem] tracking-[0.18em]">
-                  <button
-                    aria-label={`Reorder row ${row}`}
-                    className="rounded-md px-1 text-[0.8rem] text-[var(--muted)] hover:bg-white/70"
-                    onPointerDown={(event) => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      setHeaderDragState({
-                        axis: "row",
-                        sourceLogicalIndex: row,
-                        targetLogicalIndex: row,
-                        type: "reorder",
-                      });
-                    }}
-                    type="button"
-                  >
-                    ::
-                  </button>
+                <div className="flex h-full select-none items-center justify-center px-1 text-[0.6875rem] leading-none">
                   <span>{row}</span>
                 </div>
                 <div
@@ -3292,7 +2326,7 @@ export function VirtualizedSheet({
         {/* biome-ignore lint/a11y/noNoninteractiveElementInteractions: custom spreadsheet surfaces use pointer-driven selection on a scroll container */}
         <div
           aria-label="Spreadsheet grid"
-          className="relative overflow-auto bg-[linear-gradient(180deg,_rgba(255,255,255,0.98),_rgba(249,251,252,0.98))] outline-none"
+          className="relative overflow-auto bg-white outline-none"
           onDoubleClick={handleDoubleClick}
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
@@ -3311,7 +2345,7 @@ export function VirtualizedSheet({
             {showCrosshairHighlight ? (
               <>
                 <div
-                  className="pointer-events-none absolute left-0 rounded-[0.7rem] bg-[rgba(42,118,130,0.05)]"
+                  className="pointer-events-none absolute left-0 bg-[rgba(37,99,235,0.04)]"
                   style={{
                     height: activeCellLayout.height,
                     top: activeCellLayout.top,
@@ -3319,7 +2353,7 @@ export function VirtualizedSheet({
                   }}
                 />
                 <div
-                  className="pointer-events-none absolute top-0 rounded-[0.7rem] bg-[rgba(42,118,130,0.05)]"
+                  className="pointer-events-none absolute top-0 bg-[rgba(37,99,235,0.04)]"
                   style={{
                     height: "100%",
                     left: activeCellLayout.left,
@@ -3343,12 +2377,9 @@ export function VirtualizedSheet({
                   )}
                   isActive={activeCell.col === column && activeCell.row === row}
                   isGridlinesVisible={showGridlines}
-                  isSelected={selectionContainsAddress(
-                    selection,
-                    { col: column, row },
-                    columnLayout,
-                    rowLayout
-                  )}
+                  isSelected={
+                    selectedColumnSet.has(column) && selectedRowSet.has(row)
+                  }
                   key={`${row}:${column}`}
                   record={sheet.getCell({ col: column, row })}
                   rowLayout={rowLayout}
@@ -3372,12 +2403,9 @@ export function VirtualizedSheet({
                     isActive={activeCell.col === column && activeCell.row === 1}
                     isFrozen
                     isGridlinesVisible={showGridlines}
-                    isSelected={selectionContainsAddress(
-                      selection,
-                      { col: column, row: 1 },
-                      columnLayout,
-                      rowLayout
-                    )}
+                    isSelected={
+                      selectedColumnSet.has(column) && selectedRowSet.has(1)
+                    }
                     key={`frozen-top-${column}`}
                     record={sheet.getCell({ col: column, row: 1 })}
                     rowLayout={rowLayout}
@@ -3401,12 +2429,9 @@ export function VirtualizedSheet({
                     isActive={activeCell.col === 1 && activeCell.row === row}
                     isFrozen
                     isGridlinesVisible={showGridlines}
-                    isSelected={selectionContainsAddress(
-                      selection,
-                      { col: 1, row },
-                      columnLayout,
-                      rowLayout
-                    )}
+                    isSelected={
+                      selectedColumnSet.has(1) && selectedRowSet.has(row)
+                    }
                     key={`frozen-left-${row}`}
                     record={sheet.getCell({ col: 1, row })}
                     rowLayout={rowLayout}
@@ -3430,12 +2455,7 @@ export function VirtualizedSheet({
                 isActive={activeCell.col === 1 && activeCell.row === 1}
                 isFrozen
                 isGridlinesVisible={showGridlines}
-                isSelected={selectionContainsAddress(
-                  selection,
-                  { col: 1, row: 1 },
-                  columnLayout,
-                  rowLayout
-                )}
+                isSelected={selectedColumnSet.has(1) && selectedRowSet.has(1)}
                 key="frozen-corner"
                 record={sheet.getCell({ col: 1, row: 1 })}
                 rowLayout={rowLayout}
@@ -3443,7 +2463,7 @@ export function VirtualizedSheet({
             ) : null}
 
             <div
-              className="pointer-events-none absolute rounded-[0.85rem] bg-[rgba(42,118,130,0.07)]"
+              className="pointer-events-none absolute bg-[rgba(37,99,235,0.08)]"
               style={{
                 height: selectionRect.height,
                 left: selectionRect.left,
@@ -3453,7 +2473,7 @@ export function VirtualizedSheet({
             />
 
             <div
-              className="pointer-events-none absolute rounded-[0.85rem] border-2 border-[var(--accent)] shadow-[0_0_0_1px_rgba(255,255,255,0.9)]"
+              className="pointer-events-none absolute border-2 border-[#2563eb] shadow-[0_0_0_1px_rgba(255,255,255,0.92)]"
               style={{
                 height: selectionRect.height,
                 left: selectionRect.left,
@@ -3463,7 +2483,7 @@ export function VirtualizedSheet({
             />
 
             <div
-              className="pointer-events-none absolute rounded-[0.7rem] border-2 border-[var(--foreground)]"
+              className="pointer-events-none absolute border-2 border-[#2563eb]"
               style={{
                 height: activeCellLayout.height,
                 left: activeCellLayout.left,
@@ -3492,7 +2512,7 @@ export function VirtualizedSheet({
                 <div key={`peer-overlay-${peer.userId}`}>
                   {peerSelectionRect ? (
                     <div
-                      className="pointer-events-none absolute rounded-[0.8rem] border-2"
+                      className="pointer-events-none absolute border-2"
                       style={{
                         borderColor: peer.color,
                         height: peerSelectionRect.height,
@@ -3502,34 +2522,27 @@ export function VirtualizedSheet({
                       }}
                     />
                   ) : null}
-                  {peerActiveCell ? (
-                    <div
-                      className="pointer-events-none absolute rounded-[0.7rem] border-2"
-                      style={{
-                        borderColor: peer.color,
-                        height: getCellLayout(
+                  {peerActiveCell
+                    ? (() => {
+                        const peerCellLayout = getCellLayout(
                           peerActiveCell,
                           columnLayout,
                           rowLayout
-                        ).height,
-                        left: getCellLayout(
-                          peerActiveCell,
-                          columnLayout,
-                          rowLayout
-                        ).left,
-                        top: getCellLayout(
-                          peerActiveCell,
-                          columnLayout,
-                          rowLayout
-                        ).top,
-                        width: getCellLayout(
-                          peerActiveCell,
-                          columnLayout,
-                          rowLayout
-                        ).width,
-                      }}
-                    />
-                  ) : null}
+                        );
+                        return (
+                          <div
+                            className="pointer-events-none absolute border-2"
+                            style={{
+                              borderColor: peer.color,
+                              height: peerCellLayout.height,
+                              left: peerCellLayout.left,
+                              top: peerCellLayout.top,
+                              width: peerCellLayout.width,
+                            }}
+                          />
+                        );
+                      })()
+                    : null}
                 </div>
               );
             })}
@@ -3537,7 +2550,7 @@ export function VirtualizedSheet({
             {headerDragState?.type === "reorder" &&
             headerDragState.axis === "col" ? (
               <div
-                className="pointer-events-none absolute top-0 bottom-0 z-20 w-[3px] rounded-full bg-[var(--accent)]"
+                className="pointer-events-none absolute top-0 bottom-0 z-20 w-[3px] bg-[#2563eb]"
                 style={{
                   left:
                     getAxisLayoutByLogicalIndex(
@@ -3551,7 +2564,7 @@ export function VirtualizedSheet({
             {headerDragState?.type === "reorder" &&
             headerDragState.axis === "row" ? (
               <div
-                className="pointer-events-none absolute right-0 left-0 z-20 h-[3px] rounded-full bg-[var(--accent)]"
+                className="pointer-events-none absolute right-0 left-0 z-20 h-[3px] bg-[#2563eb]"
                 style={{
                   top:
                     getAxisLayoutByLogicalIndex(
@@ -3564,7 +2577,7 @@ export function VirtualizedSheet({
 
             {editingAddress && editingSurface === "cell" ? (
               <div
-                className="absolute z-20 rounded-[0.75rem] border-2 border-[var(--accent)] bg-white shadow-[0_16px_40px_rgba(15,23,42,0.12)]"
+                className="absolute z-20 border-2 border-[#2563eb] bg-white shadow-[0_8px_24px_rgba(32,33,36,0.16)]"
                 style={{
                   height: activeCellLayout.height,
                   left: activeCellLayout.left,
@@ -3573,7 +2586,7 @@ export function VirtualizedSheet({
                 }}
               >
                 <input
-                  className="h-full w-full bg-transparent px-3 py-2 text-[0.92rem] text-[var(--foreground)] outline-none"
+                  className="h-full w-full bg-transparent px-2 py-1 text-[0.76rem] text-[var(--foreground)] outline-none"
                   onBlur={() => {
                     commitEditing();
                   }}
@@ -3595,15 +2608,15 @@ export function VirtualizedSheet({
 
       {isRenameDialogOpen ? (
         <div
-          className="absolute inset-0 z-50 flex items-center justify-center bg-[rgba(15,23,42,0.18)] px-4"
+          className="absolute inset-0 z-50 flex items-center justify-center bg-[rgba(32,33,36,0.18)] px-4"
           data-dialog-root
         >
-          <div className="w-full max-w-md rounded-[1.4rem] border border-[var(--border)] bg-white p-5 shadow-[0_24px_60px_rgba(15,23,42,0.16)]">
-            <p className="font-mono text-[0.72rem] text-[var(--accent)] uppercase tracking-[0.22em]">
+          <div className="w-full max-w-md border border-[#dadce0] bg-white p-5 shadow-[0_20px_48px_rgba(32,33,36,0.18)]">
+            <p className="font-mono text-[#5f6368] text-[0.68rem] uppercase tracking-[0.18em]">
               Rename sheet
             </p>
             <input
-              className="mt-4 w-full rounded-[1rem] border border-[var(--border)] bg-[rgba(248,250,251,0.92)] px-4 py-3 text-sm outline-none"
+              className="mt-4 w-full border border-[#dadce0] bg-white px-4 py-3 text-[0.84rem] outline-none"
               onChange={(event) => {
                 setRenameDraft(event.target.value);
               }}
@@ -3617,7 +2630,7 @@ export function VirtualizedSheet({
             />
             <div className="mt-4 flex items-center justify-end gap-2">
               <button
-                className="rounded-full border border-[var(--border)] px-4 py-2 text-sm"
+                className="border border-[#dadce0] px-4 py-2 text-[0.76rem] uppercase tracking-[0.14em]"
                 onClick={() => {
                   setIsRenameDialogOpen(false);
                 }}
@@ -3626,7 +2639,7 @@ export function VirtualizedSheet({
                 Cancel
               </button>
               <button
-                className="rounded-full border border-[var(--accent)] bg-[var(--accent)] px-4 py-2 text-sm text-white"
+                className="border border-[#16a34a] bg-[#16a34a] px-4 py-2 text-[0.76rem] text-white uppercase tracking-[0.14em]"
                 onClick={() => {
                   submitRename().catch(() => undefined);
                 }}
@@ -3641,16 +2654,16 @@ export function VirtualizedSheet({
 
       {activeHelpPanel ? (
         <div
-          className="absolute inset-0 z-50 flex items-center justify-center bg-[rgba(15,23,42,0.18)] px-4"
+          className="absolute inset-0 z-50 flex items-center justify-center bg-[rgba(32,33,36,0.18)] px-4"
           data-dialog-root
         >
-          <div className="w-full max-w-2xl rounded-[1.4rem] border border-[var(--border)] bg-white p-5 shadow-[0_24px_60px_rgba(15,23,42,0.16)]">
+          <div className="w-full max-w-2xl border border-[#dadce0] bg-white p-5 shadow-[0_20px_48px_rgba(32,33,36,0.18)]">
             <div className="flex items-center justify-between gap-4">
-              <p className="font-mono text-[0.72rem] text-[var(--accent)] uppercase tracking-[0.22em]">
+              <p className="font-mono text-[#5f6368] text-[0.68rem] uppercase tracking-[0.18em]">
                 {getHelpPanelTitle(activeHelpPanel)}
               </p>
               <button
-                className="rounded-full border border-[var(--border)] px-4 py-2 text-sm"
+                className="border border-[#dadce0] px-4 py-2 text-[0.76rem] uppercase tracking-[0.14em]"
                 onClick={() => {
                   setActiveHelpPanel(null);
                 }}
@@ -3661,7 +2674,7 @@ export function VirtualizedSheet({
             </div>
 
             {activeHelpPanel === "shortcuts" ? (
-              <div className="mt-4 grid gap-2 text-sm">
+              <div className="mt-4 grid gap-2 text-[0.82rem]">
                 {[
                   ["Rename sheet", "F2"],
                   ["Undo", "Mod+Z"],
@@ -3677,7 +2690,7 @@ export function VirtualizedSheet({
                   ["Toggle row/column highlight", "Alt+H"],
                 ].map(([label, shortcut]) => (
                   <div
-                    className="flex items-center justify-between rounded-[1rem] border border-[var(--border)] bg-[rgba(248,250,251,0.9)] px-4 py-3"
+                    className="flex items-center justify-between border border-[#dadce0] bg-[#f8f9fa] px-4 py-3"
                     key={label}
                   >
                     <span>{label}</span>
@@ -3688,11 +2701,11 @@ export function VirtualizedSheet({
             ) : null}
 
             {activeHelpPanel === "formulas" ? (
-              <div className="mt-4 grid gap-3 text-sm">
+              <div className="mt-4 grid gap-3 text-[0.82rem]">
                 {["=A1+B1", "=SUM(A1:B5)", "=SUM(A1,C1,D1)", "=A5/B5"].map(
                   (example) => (
                     <div
-                      className="rounded-[1rem] border border-[var(--border)] bg-[rgba(248,250,251,0.9)] px-4 py-3 font-mono"
+                      className="border border-[#dadce0] bg-[#f8f9fa] px-4 py-3 font-mono"
                       key={example}
                     >
                       {example}
@@ -3703,16 +2716,16 @@ export function VirtualizedSheet({
             ) : null}
 
             {activeHelpPanel === "about" ? (
-              <div className="mt-4 grid gap-2 text-sm">
-                <div className="rounded-[1rem] border border-[var(--border)] bg-[rgba(248,250,251,0.9)] px-4 py-3">
+              <div className="mt-4 grid gap-2 text-[0.82rem]">
+                <div className="border border-[#dadce0] bg-[#f8f9fa] px-4 py-3">
                   <p>{document.title}</p>
-                  <p className="mt-2 text-[var(--muted)]">
+                  <p className="mt-2 text-[#5f6368]">
                     {bounds.rowCount.toLocaleString()} rows ·{" "}
                     {bounds.colCount.toLocaleString()} columns ·{" "}
                     {sheet.cellCount.toLocaleString()} populated cells
                   </p>
                 </div>
-                <div className="rounded-[1rem] border border-[var(--border)] bg-[rgba(248,250,251,0.9)] px-4 py-3 text-[var(--muted)]">
+                <div className="border border-[#dadce0] bg-[#f8f9fa] px-4 py-3 text-[#5f6368]">
                   Sparse data, virtual rendering, and lightweight formatting
                   metadata keep this editor fast even as the sheet grows.
                 </div>

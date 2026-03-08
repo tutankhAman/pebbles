@@ -14,10 +14,10 @@ import type {
 } from "@/types/spreadsheet";
 
 export const DEFAULT_SHEET_METRICS: SheetMetrics = {
-  colWidth: 152,
+  colWidth: 128,
   overscan: 3,
-  rowHeaderWidth: 72,
-  rowHeight: 46,
+  rowHeaderWidth: 56,
+  rowHeight: 34,
 };
 
 export function getColumnHeaderLabel(columnNumber: number) {
