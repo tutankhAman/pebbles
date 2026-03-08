@@ -116,36 +116,36 @@ This plan is intentionally assignment-focused:
 
 ### Checklist
 
-- [ ] Create repo structure for a single Next.js app with internal feature folders or lightweight packages only if needed.
-- [ ] Configure:
-  - [ ] strict TypeScript
-  - [ ] Biome
-  - [ ] Tailwind CSS
-- [ ] Add CI or local scripts for:
-  - [ ] typecheck
-  - [ ] lint
-  - [ ] build
-- [ ] Create a short architecture note that explains:
-  - [ ] why `Yjs` is used for live collaboration
-  - [ ] why `InstantDB` is limited to metadata
-  - [ ] why Firebase Auth is used for identity
-  - [ ] why HyperFormula is used for formulas
-  - [ ] why formula evaluation runs in a separate worker
-  - [ ] how contention is handled
-  - [ ] what formula scope is intentionally limited
-  - [ ] what is deliberately out of scope
-- [ ] Create a minimal README scaffold with sections for:
-  - [ ] setup
-  - [ ] architecture
-  - [ ] tradeoffs
-  - [ ] demo instructions
-  - [ ] submission checklist
+- [x] Create repo structure for a single Next.js app with internal feature folders or lightweight packages only if needed.
+- [x] Configure:
+  - [x] strict TypeScript
+  - [x] Biome
+  - [x] Tailwind CSS
+- [x] Add CI or local scripts for:
+  - [x] typecheck
+  - [x] lint
+  - [x] build
+- [x] Create a short architecture note that explains:
+  - [x] why `Yjs` is used for live collaboration
+  - [x] why `InstantDB` is limited to metadata
+  - [x] why Firebase Auth is used for identity
+  - [x] why HyperFormula is used for formulas
+  - [x] why formula evaluation runs in a separate worker
+  - [x] how contention is handled
+  - [x] what formula scope is intentionally limited
+  - [x] what is deliberately out of scope
+- [x] Create a minimal README scaffold with sections for:
+  - [x] setup
+  - [x] architecture
+  - [x] tradeoffs
+  - [x] demo instructions
+  - [x] submission checklist
 
 ### Exit Criteria
 
-- [ ] App boots locally.
-- [ ] Typecheck, lint, and build scripts exist.
-- [ ] Scope and tradeoffs are documented before feature work starts.
+- [x] App boots locally.
+- [x] Typecheck, lint, and build scripts exist.
+- [x] Scope and tradeoffs are documented before feature work starts.
 
 ---
 
@@ -153,39 +153,39 @@ This plan is intentionally assignment-focused:
 
 ### Goals
 
-- [ ] Ship the required home screen and user identity flow first.
+- [x] Ship the required home screen and user identity flow first.
 
 ### Checklist
 
-- [ ] Set up Firebase Auth with Google sign-in.
-- [ ] Add first-time identity fallback:
-  - [ ] prompt for display name if not signed in
-  - [ ] assign deterministic session color
-- [ ] Persist session identity needed for collaboration presence.
-- [ ] Define InstantDB collections / shape for:
-  - [ ] users
-  - [ ] documents
-  - [ ] document membership or access records if needed
-  - [ ] document metadata
-- [ ] Define metadata fields:
-  - [ ] title
-  - [ ] last modified timestamp
-  - [ ] author / owner
-  - [ ] collaboration room identifier
-- [ ] Implement dashboard view showing:
-  - [ ] document title
-  - [ ] last modified timestamp
-  - [ ] author / owner
-- [ ] Implement create document action.
-- [ ] Implement open existing document action.
-- [ ] Implement update of `last modified` when document content changes.
-- [ ] Make dashboard responsive and clean enough for demo use.
+- [x] Set up Firebase Auth with Google sign-in.
+- [x] Add first-time identity fallback:
+  - [x] prompt for display name if not signed in
+  - [x] assign deterministic session color
+- [x] Persist session identity needed for collaboration presence.
+- [x] Define InstantDB collections / shape for:
+  - [x] users
+  - [x] documents
+  - [x] document membership or access records if needed
+  - [x] document metadata
+- [x] Define metadata fields:
+  - [x] title
+  - [x] last modified timestamp
+  - [x] author / owner
+  - [x] collaboration room identifier
+- [x] Implement dashboard view showing:
+  - [x] document title
+  - [x] last modified timestamp
+  - [x] author / owner
+- [x] Implement create document action.
+- [x] Implement open existing document action.
+- [x] Implement update of `last modified` when document content changes.
+- [x] Make dashboard responsive and clean enough for demo use.
 
 ### Exit Criteria
 
-- [ ] New user can set identity or sign in.
-- [ ] User can create and open documents.
-- [ ] Dashboard visibly satisfies the assignment requirement.
+- [x] New user can set identity or sign in.
+- [x] User can create and open documents.
+- [x] Dashboard visibly satisfies the assignment requirement.
 
 ---
 
@@ -193,41 +193,41 @@ This plan is intentionally assignment-focused:
 
 ### Goals
 
-- [ ] Design the sheet model around sparse storage and cheap viewport reads.
-- [ ] Support large logical grids without allocating large matrices.
+- [x] Design the sheet model around sparse storage and cheap viewport reads.
+- [x] Support large logical grids without allocating large matrices.
 
 ### Checklist
 
-- [ ] Define core types:
-  - [ ] `CellAddress`
-  - [ ] `CellContent`
-  - [ ] `FormulaInput`
-  - [ ] `ComputedValue`
-  - [ ] `Selection`
-  - [ ] `Viewport`
-- [ ] Choose internal cell key format:
-  - [ ] row and column coordinates as canonical internal form
-  - [ ] `A1` helpers for display and parsing
-- [ ] Implement sparse storage:
-  - [ ] only non-empty cells are stored
-  - [ ] empty cells are derived implicitly
-- [ ] Define logical sheet bounds that allow `1M` addressable cells.
-- [ ] Add chunk/window helpers for viewport access.
-- [ ] Implement core operations:
-  - [ ] set cell
-  - [ ] clear cell
-  - [ ] read cell
-  - [ ] read rectangular range
-  - [ ] batch paste range
-- [ ] Add tests for:
-  - [ ] address conversions
-  - [ ] sparse reads and writes
-  - [ ] large logical grid access
+- [x] Define core types:
+  - [x] `CellAddress`
+  - [x] `CellContent`
+  - [x] `FormulaInput`
+  - [x] `ComputedValue`
+  - [x] `Selection`
+  - [x] `Viewport`
+- [x] Choose internal cell key format:
+  - [x] row and column coordinates as canonical internal form
+  - [x] `A1` helpers for display and parsing
+- [x] Implement sparse storage:
+  - [x] only non-empty cells are stored
+  - [x] empty cells are derived implicitly
+- [x] Define logical sheet bounds that allow `1M` addressable cells.
+- [x] Add chunk/window helpers for viewport access.
+- [x] Implement core operations:
+  - [x] set cell
+  - [x] clear cell
+  - [x] read cell
+  - [x] read rectangular range
+  - [x] batch paste range
+- [x] Add tests for:
+  - [x] address conversions
+  - [x] sparse reads and writes
+  - [x] large logical grid access
 
 ### Exit Criteria
 
-- [ ] Data model supports `1M` logical cells without dense allocation.
-- [ ] Core cell operations are stable and test-covered.
+- [x] Data model supports `1M` logical cells without dense allocation.
+- [x] Core cell operations are stable and test-covered.
 
 ---
 
@@ -235,34 +235,34 @@ This plan is intentionally assignment-focused:
 
 ### Goals
 
-- [ ] Render a fast, scrollable grid suitable for the assignment demo.
-- [ ] Only render what is visible plus a small buffer.
+- [x] Render a fast, scrollable grid suitable for the assignment demo.
+- [x] Only render what is visible plus a small buffer.
 
 ### Checklist
 
-- [ ] Implement spreadsheet viewport model:
-  - [ ] scroll position
-  - [ ] visible row range
-  - [ ] visible column range
-  - [ ] overscan buffer
-- [ ] Render:
-  - [ ] column headers with letters
-  - [ ] row headers with numbers
-  - [ ] visible cell window
-- [ ] Ensure editor grid scrolls smoothly on large logical sheets.
-- [ ] Map pointer coordinates to cell coordinates.
-- [ ] Implement active-cell and selection visuals.
-- [ ] Avoid rendering the full logical grid.
-- [ ] Measure:
-  - [ ] scroll smoothness
-  - [ ] visible window computation cost
-  - [ ] cost of selection updates
+- [x] Implement spreadsheet viewport model:
+  - [x] scroll position
+  - [x] visible row range
+  - [x] visible column range
+  - [x] overscan buffer
+- [x] Render:
+  - [x] column headers with letters
+  - [x] row headers with numbers
+  - [x] visible cell window
+- [x] Ensure editor grid scrolls smoothly on large logical sheets.
+- [x] Map pointer coordinates to cell coordinates.
+- [x] Implement active-cell and selection visuals.
+- [x] Avoid rendering the full logical grid.
+- [x] Measure:
+  - [x] scroll smoothness
+  - [x] visible window computation cost
+  - [x] cost of selection updates
 
 ### Exit Criteria
 
-- [ ] Grid is scrollable and usable.
-- [ ] Rendering strategy clearly supports large logical sheets.
-- [ ] Demoing large-sheet scrolling is plausible without visible collapse.
+- [x] Grid is scrollable and usable.
+- [x] Rendering strategy clearly supports large logical sheets.
+- [x] Demoing large-sheet scrolling is plausible without visible collapse.
 
 ---
 
@@ -270,42 +270,42 @@ This plan is intentionally assignment-focused:
 
 ### Goals
 
-- [ ] Make editing feel spreadsheet-like.
-- [ ] Expose sync state clearly to the user.
+- [x] Make editing feel spreadsheet-like.
+- [x] Expose sync state clearly to the user.
 
 ### Checklist
 
-- [ ] Implement editable cell interaction:
-  - [ ] click to select
-  - [ ] double click or direct typing to edit
-  - [ ] commit on enter / blur
-- [ ] Implement keyboard navigation:
-  - [ ] arrow keys
-  - [ ] tab
-  - [ ] enter
-  - [ ] escape
-- [ ] Implement rectangular selection.
-- [ ] Implement copy and paste for rectangular cell data if time allows inside core scope.
-- [ ] Add write-state indicator states:
-  - [ ] `Saving...`
-  - [ ] `Saved`
-  - [ ] `Reconnecting...`
-  - [ ] optional `Offline`
-- [ ] Define when state transitions occur:
-  - [ ] local edit queued
-  - [ ] server ack or subscription confirmation received
-  - [ ] connection lost
-  - [ ] connection restored
-- [ ] Add tests for:
-  - [ ] keyboard movement
-  - [ ] edit commit behavior
-  - [ ] write-state transitions
+- [x] Implement editable cell interaction:
+  - [x] click to select
+  - [x] double click or direct typing to edit
+  - [x] commit on enter / blur
+- [x] Implement keyboard navigation:
+  - [x] arrow keys
+  - [x] tab
+  - [x] enter
+  - [x] escape
+- [x] Implement rectangular selection.
+- [x] Implement copy and paste for rectangular cell data if time allows inside core scope.
+- [x] Add write-state indicator states:
+  - [x] `Saving...`
+  - [x] `Saved`
+  - [x] `Reconnecting...`
+  - [x] optional `Offline`
+- [x] Define when state transitions occur:
+  - [x] local edit queued
+  - [x] server ack or subscription confirmation received
+  - [x] connection lost
+  - [x] connection restored
+- [x] Add tests for:
+  - [x] keyboard movement
+  - [x] edit commit behavior
+  - [x] write-state transitions
 
 ### Exit Criteria
 
-- [ ] Editing works reliably.
-- [ ] Navigation behaves as expected for core keys.
-- [ ] Write-state indicator is visible and understandable.
+- [x] Editing works reliably.
+- [x] Navigation behaves as expected for core keys.
+- [x] Write-state indicator is visible and understandable.
 
 ---
 
