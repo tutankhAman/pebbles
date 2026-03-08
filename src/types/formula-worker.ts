@@ -1,3 +1,5 @@
+import type { ComputedValue, SheetBounds } from "@/types/spreadsheet";
+
 export interface FormulaWorkerCellInput {
   key: string;
   raw: string;
@@ -5,6 +7,7 @@ export interface FormulaWorkerCellInput {
 
 export type FormulaWorkerRequest =
   | {
+      bounds: SheetBounds;
       cells: FormulaWorkerCellInput[];
       type: "bootstrap";
     }
@@ -28,7 +31,7 @@ export type FormulaWorkerRequest =
 
 export interface FormulaWorkerComputedValue {
   key: string;
-  value: boolean | number | string | null;
+  value: ComputedValue;
 }
 
 export interface FormulaWorkerError {
