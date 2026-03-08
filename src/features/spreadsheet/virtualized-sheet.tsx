@@ -122,6 +122,7 @@ const DEFAULT_SELECTION: CellAddress = {
   col: 1,
   row: 1,
 };
+const LIVE_EDIT_SYNC_DELAY_MS = 90;
 const RECONNECT_SETTLE_DELAY_MS = 220;
 const WRITE_CONFIRMATION_DELAY_MS = 180;
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the editor composes menu actions, virtualization, and collaboration in one client boundary.
@@ -149,10 +150,17 @@ export function VirtualizedSheet({
   const cellEditorSelectionBehaviorRef = useRef<"caret-at-end" | "select-all">(
     "select-all"
   );
+  const editSessionInitialValueRef = useRef<string | null>(null);
+  const editSessionHistoryStateRef = useRef<HistoryState | null>(null);
   const pointerAnchorRef = useRef<CellAddress | null>(null);
   const clipboardTextRef = useRef("");
   const isPointerSelectingRef = useRef(false);
   const commitTimerRef = useRef<number | null>(null);
+  const liveEditSyncTimerRef = useRef<number | null>(null);
+  const pendingLiveEditSyncRef = useRef<{
+    address: CellAddress;
+    raw: string;
+  } | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
   const writeStateRef = useRef<WriteState>("idle");
   const historyRef = useRef<{
@@ -582,14 +590,23 @@ export function VirtualizedSheet({
     applySelection(historyState.selection);
   };
 
-  const applyOptimisticCellWrite = (address: CellAddress, raw: string) => {
+  const applyOptimisticCellWrite = (
+    address: CellAddress,
+    raw: string,
+    options?: {
+      syncFormula?: boolean;
+    }
+  ) => {
     const key = createCellKey(address);
+    const shouldSyncFormula = options?.syncFormula ?? true;
 
     if (raw.trim() === "") {
       const changed = sheet.clearCell(address);
 
       if (changed) {
-        deleteCell(key);
+        if (shouldSyncFormula) {
+          deleteCell(key);
+        }
         setCellRevisionWithTransition();
       }
 
@@ -600,10 +617,14 @@ export function VirtualizedSheet({
       kind: getCellKind(raw),
       raw,
     });
-    upsertFormulaCell({
-      key,
-      raw,
-    });
+
+    if (shouldSyncFormula) {
+      upsertFormulaCell({
+        key,
+        raw,
+      });
+    }
+
     setCellRevisionWithTransition();
   };
 
@@ -800,18 +821,109 @@ export function VirtualizedSheet({
     );
   };
 
-  const writeCell = (address: CellAddress, value: string) => {
-    runTrackedMutation(() => {
-      const key = createCellKey(address);
+  const resetEditSessionTracking = () => {
+    editSessionInitialValueRef.current = null;
+    editSessionHistoryStateRef.current = null;
+  };
 
-      applyOptimisticCellWrite(address, value);
-      syncUpsertCell({
-        key,
-        raw: value,
-      });
-      scheduleWriteConfirmation();
-      syncDocumentTimestamp();
+  const flushPendingLiveEditSync = () => {
+    const pendingSync = pendingLiveEditSyncRef.current;
+
+    if (!pendingSync) {
+      return;
+    }
+
+    pendingLiveEditSyncRef.current = null;
+
+    if (
+      typeof window !== "undefined" &&
+      liveEditSyncTimerRef.current !== null
+    ) {
+      window.clearTimeout(liveEditSyncTimerRef.current);
+      liveEditSyncTimerRef.current = null;
+    }
+
+    const key = createCellKey(pendingSync.address);
+
+    syncUpsertCell({
+      key,
+      raw: pendingSync.raw,
     });
+
+    if (pendingSync.raw.trim() === "") {
+      deleteCell(key);
+    } else {
+      upsertFormulaCell({
+        key,
+        raw: pendingSync.raw,
+      });
+    }
+
+    scheduleWriteConfirmation();
+  };
+
+  const syncLiveEditValue = (address: CellAddress, raw: string) => {
+    if (getCellDisplayValue(sheet.getCell(address)) === raw) {
+      return;
+    }
+
+    applyOptimisticCellWrite(address, raw, {
+      syncFormula: false,
+    });
+    pendingLiveEditSyncRef.current = {
+      address,
+      raw,
+    };
+
+    if (typeof window === "undefined") {
+      flushPendingLiveEditSync();
+      return;
+    }
+
+    if (liveEditSyncTimerRef.current !== null) {
+      window.clearTimeout(liveEditSyncTimerRef.current);
+    }
+
+    liveEditSyncTimerRef.current = window.setTimeout(() => {
+      liveEditSyncTimerRef.current = null;
+      flushPendingLiveEditSync();
+    }, LIVE_EDIT_SYNC_DELAY_MS);
+  };
+
+  const finalizeEditHistory = () => {
+    const beforeState = editSessionHistoryStateRef.current;
+
+    if (!beforeState) {
+      resetEditSessionTracking();
+      return false;
+    }
+
+    const afterSnapshot = sheet.snapshot();
+    const changes = getSnapshotChanges(beforeState.snapshot, afterSnapshot);
+    const didChange = hasSnapshotChanges(
+      changes,
+      beforeState.snapshot,
+      afterSnapshot
+    );
+
+    if (didChange) {
+      pushHistoryState(beforeState);
+    }
+
+    resetEditSessionTracking();
+    return didChange;
+  };
+
+  const revertLiveEdit = (address: CellAddress) => {
+    const initialValue = editSessionInitialValueRef.current;
+
+    if (initialValue == null) {
+      resetEditSessionTracking();
+      return;
+    }
+
+    syncLiveEditValue(address, initialValue);
+    resetEditSessionTracking();
   };
 
   const clearSelectionContents = () => {
@@ -842,8 +954,19 @@ export function VirtualizedSheet({
       selectAll?: boolean;
     }
   ) => {
-    const nextValue =
-      initialValue ?? getCellDisplayValue(sheet.getCell(address));
+    const originalValue = getCellDisplayValue(sheet.getCell(address));
+    const isSameEditingCell =
+      editingAddress?.row === address.row && editingAddress.col === address.col;
+    const nextValue = initialValue ?? originalValue;
+
+    if (!isSameEditingCell) {
+      editSessionInitialValueRef.current = originalValue;
+      editSessionHistoryStateRef.current = {
+        selection,
+        snapshot: sheet.snapshot(),
+      };
+    }
+
     setEditingAddress(address);
     setEditingSurface(surface);
     setDraftValue(nextValue);
@@ -875,11 +998,29 @@ export function VirtualizedSheet({
       return;
     }
 
-    writeCell(editingAddress, draftValue);
+    syncLiveEditValue(editingAddress, draftValue);
+    flushPendingLiveEditSync();
+    const didChange = finalizeEditHistory();
     const nextSelection =
       options?.nextSelection ?? createCellSelection(editingAddress);
     stopEditing();
+
+    if (didChange) {
+      syncDocumentTimestamp();
+    }
+
     applySelection(nextSelection);
+  };
+
+  const cancelEditing = () => {
+    if (!editingAddress) {
+      return;
+    }
+
+    revertLiveEdit(editingAddress);
+    flushPendingLiveEditSync();
+    stopEditing();
+    applySelection(createCellSelection(editingAddress));
   };
 
   const handleExport = (format: "csv" | "json" | "tsv") => {
@@ -1730,7 +1871,7 @@ export function VirtualizedSheet({
   const handleInputKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Escape") {
       event.preventDefault();
-      stopEditing();
+      cancelEditing();
       return;
     }
 
@@ -1760,7 +1901,7 @@ export function VirtualizedSheet({
   const handleFormulaBarKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Escape") {
       event.preventDefault();
-      stopEditing();
+      cancelEditing();
       return;
     }
 
@@ -1891,18 +2032,18 @@ export function VirtualizedSheet({
                 }
               }}
               onChange={(event) => {
+                const nextValue = event.target.value;
+
                 if (
                   editingAddress == null ||
                   editingSurface !== "formula-bar"
                 ) {
-                  setEditingAddress(activeCell);
-                  setEditingSurface("formula-bar");
+                  startEditing(activeCell, activeCellRaw, "formula-bar");
                 }
 
-                setDraftValue(event.target.value);
-                setEditorMode(
-                  event.target.value.startsWith("=") ? "formula" : "edit"
-                );
+                setDraftValue(nextValue);
+                setEditorMode(nextValue.startsWith("=") ? "formula" : "edit");
+                syncLiveEditValue(activeCell, nextValue);
               }}
               onFocus={handleFormulaBarFocus}
               onKeyDown={handleFormulaBarKeyDown}
@@ -2303,10 +2444,13 @@ export function VirtualizedSheet({
                     commitEditing();
                   }}
                   onChange={(event) => {
-                    setDraftValue(event.target.value);
+                    const nextValue = event.target.value;
+
+                    setDraftValue(nextValue);
                     setEditorMode(
-                      event.target.value.startsWith("=") ? "formula" : "edit"
+                      nextValue.startsWith("=") ? "formula" : "edit"
                     );
+                    syncLiveEditValue(editingAddress, nextValue);
                   }}
                   onKeyDown={handleInputKeyDown}
                   ref={inputRef}

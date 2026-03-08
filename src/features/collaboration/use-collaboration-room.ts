@@ -45,6 +45,7 @@ export interface CollaborationSheetChangeSet {
 }
 
 const EMPTY_SNAPSHOT = {
+  changeSource: "initial" as const,
   columnOrder: [] as number[],
   columnWidths: new Map<number, number>(),
   formats: new Map<string, CellFormatRecord>(),
@@ -244,6 +245,13 @@ export function useCollaborationRoom(args: {
   }, [args.initialCells, room, snapshot.status, snapshot.values.size]);
 
   useEffect(() => {
+    const isInitialHydration =
+      previousValuesRef.current.size === 0 &&
+      previousFormatsRef.current.size === 0 &&
+      previousColumnWidthsRef.current.size === 0 &&
+      previousRowHeightsRef.current.size === 0 &&
+      previousColumnOrderRef.current.length === 0 &&
+      previousRowOrderRef.current.length === 0;
     const cells = collectKeyedChanges({
       next: snapshot.values,
       previous: previousValuesRef.current,
@@ -278,12 +286,13 @@ export function useCollaborationRoom(args: {
     previousRowOrderRef.current = [...snapshot.rowOrder];
 
     if (
-      cells.length > 0 ||
-      formats.length > 0 ||
-      columnWidths.length > 0 ||
-      rowHeights.length > 0 ||
-      didColumnOrderChange ||
-      didRowOrderChange
+      (isInitialHydration || snapshot.changeSource !== "local") &&
+      (cells.length > 0 ||
+        formats.length > 0 ||
+        columnWidths.length > 0 ||
+        rowHeights.length > 0 ||
+        didColumnOrderChange ||
+        didRowOrderChange)
     ) {
       handleSheetChanges({
         cells,
@@ -295,6 +304,7 @@ export function useCollaborationRoom(args: {
       });
     }
   }, [
+    snapshot.changeSource,
     snapshot.columnOrder,
     snapshot.columnWidths,
     snapshot.formats,
