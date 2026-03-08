@@ -5,14 +5,37 @@ export interface CellAddress {
 
 export type CellKind = "formula" | "number" | "text";
 
-export interface CellRecord {
+export interface CellContent {
   kind: CellKind;
   raw: string;
+}
+
+export interface FormulaInput {
+  expression: string;
+  raw: string;
+}
+
+export interface CellRecord extends CellContent {
   updatedAt?: number;
   updatedBy?: string;
 }
 
 export type ComputedValue = boolean | number | string | null;
+
+export interface SheetBounds {
+  colCount: number;
+  rowCount: number;
+}
+
+export interface ChunkAddress {
+  col: number;
+  row: number;
+}
+
+export interface ChunkSize {
+  colCount: number;
+  rowCount: number;
+}
 
 export type Selection =
   | {
@@ -33,4 +56,13 @@ export interface Viewport {
   rowStart: number;
   scrollX: number;
   scrollY: number;
+  viewportHeight?: number;
+  viewportWidth?: number;
+}
+
+export interface VisibleWindow {
+  colEnd: number;
+  colStart: number;
+  rowEnd: number;
+  rowStart: number;
 }
