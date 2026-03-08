@@ -120,10 +120,10 @@ export function DocumentShell({ documentId }: { documentId: string }) {
         <header className="relative z-40 overflow-visible border-[#e0e0e0] border-b bg-[linear-gradient(180deg,#ffffff,rgba(255,255,255,0.96))] px-3 py-2 shadow-[0_1px_0_rgba(60,64,67,0.08)]">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-2.5">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-sm bg-[#0f9d58]">
-                <div className="grid h-[1.25rem] w-[1.25rem] grid-cols-3 grid-rows-3 gap-[1.5px]">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center bg-[#0f9d58]">
+                <div className="grid h-4 w-4 grid-cols-3 grid-rows-3 gap-[1px]">
                   {SPREADSHEET_ICON_CELLS.map((cell) => (
-                    <span className="rounded-[0.5px] bg-white/90" key={cell} />
+                    <span className="bg-white/90" key={cell} />
                   ))}
                 </div>
               </div>
@@ -143,11 +143,11 @@ export function DocumentShell({ documentId }: { documentId: string }) {
                 collaboration={collaboration}
                 session={session}
               />
-              <span className="hidden rounded-full border border-[#dadce0] bg-[#f8f9fa] px-3 py-1.5 text-[#5f6368] text-[0.6875rem] leading-none sm:inline-flex">
+              <span className="hidden h-8 items-center border border-[#dadce0] bg-[#f8f9fa] px-3 font-medium text-[#5f6368] text-[0.6875rem] leading-none sm:inline-flex">
                 {formatWriteState(writeState)}
               </span>
               <Link
-                className="inline-flex items-center justify-center rounded-full border border-[#dadce0] bg-[#f8f9fa] px-4 py-1.5 text-[#3c4043] text-[0.6875rem] leading-none transition-colors hover:bg-[#eef3fd] hover:text-[#1a73e8]"
+                className="inline-flex h-8 items-center justify-center border border-[#dadce0] bg-[#f8f9fa] px-4 font-medium text-[#3c4043] text-[0.6875rem] leading-none transition-colors hover:bg-[#eef3fd] hover:text-[#1a73e8]"
                 href="/dashboard"
               >
                 Dashboard

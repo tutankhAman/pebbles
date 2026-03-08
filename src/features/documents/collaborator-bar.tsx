@@ -175,8 +175,8 @@ export function CollaboratorBar({
       className="relative z-50 flex min-w-0 items-center justify-end gap-2"
       ref={rootRef}
     >
-      <div className="hidden rounded-full border border-[#dadce0] bg-[#f8f9fa] px-3 py-1.5 text-[#5f6368] text-[0.6875rem] leading-none md:inline-flex md:items-center md:gap-2">
-        <span className={`h-2 w-2 rounded-full ${statusDotClassName}`} />
+      <div className="hidden h-8 border border-[#dadce0] bg-[#f8f9fa] px-3 font-medium text-[#5f6368] text-[0.6875rem] leading-none md:inline-flex md:items-center md:gap-2">
+        <span className={`h-2 w-2 ${statusDotClassName}`} />
         <span>{statusLabel}</span>
         {collaboration.lastRemoteLatencyMs != null ? (
           <span className="text-[#80868b]">
@@ -185,8 +185,8 @@ export function CollaboratorBar({
         ) : null}
       </div>
 
-      <div className="flex min-w-0 items-center gap-2 rounded-full border border-[#dadce0] bg-[#f8f9fa] px-2 py-1">
-        <span className="hidden pl-1.5 font-medium text-[#3c4043] text-[0.6875rem] leading-none sm:inline">
+      <div className="flex h-8 min-w-0 items-center gap-2 border border-[#dadce0] bg-[#f8f9fa] px-2">
+        <span className="hidden pl-1 font-medium text-[#3c4043] text-[0.6875rem] leading-none sm:inline">
           {collaborators.length} user{collaborators.length === 1 ? "" : "s"}
         </span>
 
@@ -204,7 +204,7 @@ export function CollaboratorBar({
                   aria-expanded={isOpen}
                   aria-haspopup="dialog"
                   aria-label={`View collaborator details for ${collaborator.displayName}`}
-                  className={`relative flex h-9 w-9 items-center justify-center overflow-hidden rounded-full border-2 bg-white shadow-[0_1px_2px_rgba(60,64,67,0.16)] transition-transform hover:z-10 hover:-translate-y-0.5 focus-visible:z-10 focus-visible:-translate-y-0.5 focus-visible:outline-none ${
+                  className={`relative flex h-8 w-8 items-center justify-center overflow-hidden border bg-white shadow-[0_1px_2px_rgba(60,64,67,0.16)] transition-transform hover:z-10 hover:-translate-y-[1px] focus-visible:z-10 focus-visible:-translate-y-[1px] focus-visible:outline-none ${
                     isOpen ? "z-20 scale-[1.04]" : "z-0"
                   }`}
                   onClick={() => {
@@ -224,19 +224,19 @@ export function CollaboratorBar({
                 >
                   <Image
                     alt={`${collaborator.displayName} avatar`}
-                    className="h-full w-full"
-                    height={36}
+                    className="h-full w-full object-cover"
+                    height={32}
                     src={createAvatarDataUri(
                       `${collaborator.userId}:${collaborator.displayName}`
                     )}
                     unoptimized
-                    width={36}
+                    width={32}
                   />
                 </button>
 
                 {isOpen ? (
                   <div
-                    className="pointer-events-auto absolute top-[calc(100%+0.625rem)] right-0 z-30 w-60 rounded-2xl border border-[#dadce0] bg-white p-4 text-left shadow-[0_18px_48px_rgba(60,64,67,0.18)]"
+                    className="pointer-events-auto absolute top-[calc(100%+0.625rem)] right-0 z-30 w-60 border border-[#dadce0] bg-white p-4 text-left shadow-[0_18px_48px_rgba(60,64,67,0.18)]"
                     onPointerDown={(event) => {
                       event.stopPropagation();
                     }}
@@ -244,7 +244,7 @@ export function CollaboratorBar({
                   >
                     <div className="mb-3 flex items-start gap-3">
                       <div
-                        className="h-3 w-3 rounded-full"
+                        className="h-3 w-3"
                         style={{ backgroundColor: collaborator.color }}
                       />
                       <div className="min-w-0">
@@ -257,7 +257,7 @@ export function CollaboratorBar({
                       </div>
                     </div>
 
-                    <div className="rounded-xl bg-[#f8f9fa] px-3 py-2.5">
+                    <div className="bg-[#f8f9fa] px-3 py-2.5">
                       <p className="text-[#5f6368] text-[0.625rem] uppercase tracking-[0.18em]">
                         Cell selected
                       </p>
