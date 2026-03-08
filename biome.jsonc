@@ -4,5 +4,15 @@
     "ultracite/biome/core",
     "ultracite/biome/next",
     "ultracite/biome/react"
-  ]
+  ],
+  "javascript": {
+    "globals": [
+      "WebSocketPair",
+      "WebSocketRequestResponsePair",
+      "DurableObjectState",
+      "DurableObject",
+      "DurableObjectNamespace",
+      "DurableObjectStub"
+    ]
+  }
 }

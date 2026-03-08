@@ -4,8 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:worker": "npm run dev --prefix worker",
     "build": "next build",
-    "collab:server": "bun run server/collab/collaboration-server.mjs",
     "start": "next start",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
@@ -15,7 +15,6 @@
     "prepare": "husky"
   },
   "dependencies": {
-    "@instantdb/react": "^0.22.155",
     "firebase": "^12.10.0",
     "hyperformula": "^3.2.0",
     "next": "16.1.6",
