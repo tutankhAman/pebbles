@@ -71,7 +71,13 @@ context/
 - The submission is assignment-focused, not product-complete.
 - Metadata and live collaboration are intentionally split.
 - Snapshot/versioning/object storage are deferred.
-- Formula scope will stay intentionally narrow even with HyperFormula.
+- `HyperFormula` is used instead of a custom parser because correctness and dependency tracking matter more than writing formula code from scratch for this assignment.
+- Formula evaluation runs in a dedicated worker so scroll and edit interactions stay responsive while recalculation happens off the main thread.
+- Formula scope stays intentionally narrow even with `HyperFormula`:
+  - arithmetic such as `=A1+B1`
+  - direct cell references
+  - `SUM(...)` over arguments or ranges
+- That scope is enough for the assignment rubric while keeping the implementation explainable.
 
 ## Demo Notes
 
