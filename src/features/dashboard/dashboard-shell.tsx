@@ -8,7 +8,6 @@ import {
   useEffect,
   useMemo,
   useState,
-  useTransition,
 } from "react";
 import { useAuth } from "@/features/auth/auth-provider";
 import {
@@ -35,80 +34,6 @@ function EmptyState() {
         collaboration stack.
       </p>
     </div>
-  );
-}
-
-function IdentityOnboarding() {
-  const {
-    errorMessage,
-    isConfigured,
-    isPending,
-    setGuestIdentity,
-    signInWithGoogle,
-  } = useAuth();
-  const [displayName, setDisplayName] = useState("");
-  const [isSavingGuest, startGuestTransition] = useTransition();
-
-  return (
-    <section className="grid gap-6 rounded-[2rem] border border-[var(--border)] bg-white/85 p-6 shadow-[0_18px_48px_rgba(16,24,40,0.1)] backdrop-blur lg:grid-cols-[1.15fr_0.85fr]">
-      <div className="space-y-4">
-        <p className="font-mono text-[0.72rem] text-[var(--accent)] uppercase tracking-[0.3em]">
-          Identity setup
-        </p>
-        <h2 className="font-semibold text-3xl tracking-tight sm:text-4xl">
-          Pick a session identity before you enter the workspace.
-        </h2>
-        <p className="max-w-xl text-[var(--muted)] leading-8">
-          Phase 1 requires a stable display name and session color. You can use
-          Google sign-in when Firebase is configured, or continue as a local
-          guest for development.
-        </p>
-      </div>
-
-      <div className="space-y-4 rounded-[1.5rem] border border-[var(--border)] bg-[var(--panel)] p-5">
-        <label className="block">
-          <span className="font-mono text-[0.68rem] text-[var(--muted)] uppercase tracking-[0.24em]">
-            Display name
-          </span>
-          <input
-            className="mt-2 w-full rounded-2xl border border-[var(--border)] bg-white px-4 py-3 outline-none transition-colors focus:border-[var(--accent)]"
-            onChange={(event: ChangeEvent<HTMLInputElement>) =>
-              setDisplayName(event.target.value)
-            }
-            placeholder="Ada Lovelace"
-            value={displayName}
-          />
-        </label>
-
-        <button
-          className="inline-flex w-full items-center justify-center rounded-full bg-[var(--foreground)] px-5 py-3 font-medium text-[var(--background)] disabled:cursor-not-allowed disabled:opacity-60"
-          disabled={!displayName.trim() || isSavingGuest}
-          onClick={() => {
-            startGuestTransition(() => {
-              setGuestIdentity(displayName);
-            });
-          }}
-          type="button"
-        >
-          {isSavingGuest ? "Saving guest identity..." : "Continue as guest"}
-        </button>
-
-        <button
-          className="inline-flex w-full items-center justify-center rounded-full border border-[var(--border)] bg-white px-5 py-3 font-medium disabled:cursor-not-allowed disabled:opacity-60"
-          disabled={!isConfigured || isPending}
-          onClick={signInWithGoogle}
-          type="button"
-        >
-          {isConfigured ? "Sign in with Google" : "Google sign-in unavailable"}
-        </button>
-
-        {errorMessage ? (
-          <p className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900 text-sm">
-            {errorMessage}
-          </p>
-        ) : null}
-      </div>
-    </section>
   );
 }
 
@@ -168,7 +93,11 @@ export function DashboardShell() {
       </div>
     );
   } else if (!session) {
-    content = <IdentityOnboarding />;
+    content = (
+      <div className="rounded-[1.75rem] border border-[var(--border)] bg-white/70 px-6 py-8 text-[var(--muted)]">
+        Waiting for identity setup...
+      </div>
+    );
   } else if (documents.length === 0) {
     content = <EmptyState />;
   } else {
