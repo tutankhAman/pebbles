@@ -88,6 +88,38 @@ function createLocalPresence(identity: SessionIdentity): PresenceState {
   };
 }
 
+function isPresenceState(value: unknown): value is PresenceState {
+  if (!(value && typeof value === "object")) {
+    return false;
+  }
+
+  const candidate = value as Partial<PresenceState>;
+
+  if (
+    typeof candidate.color !== "string" ||
+    typeof candidate.displayName !== "string" ||
+    typeof candidate.userId !== "string"
+  ) {
+    return false;
+  }
+
+  if (
+    candidate.activeCell != null &&
+    typeof candidate.activeCell !== "string"
+  ) {
+    return false;
+  }
+
+  if (candidate.selection == null) {
+    return true;
+  }
+
+  return (
+    typeof candidate.selection.start === "string" &&
+    typeof candidate.selection.end === "string"
+  );
+}
+
 function getCellKind(raw: string): CellRecord["kind"] {
   if (raw.startsWith("=")) {
     return "formula";
@@ -546,9 +578,21 @@ export class BroadcastCollaborationRoom {
   }
 
   private createSnapshot(): CollaborationSnapshot {
-    const peers = Array.from(this.awareness.getStates().values())
-      .map((state) => state as PresenceState)
-      .filter((state) => state.userId !== this.session.userId);
+    const peerIds = new Set<string>();
+    const peers = Array.from(this.awareness.getStates().values()).flatMap(
+      (state): PresenceState[] => {
+        if (!isPresenceState(state)) {
+          return [];
+        }
+
+        if (state.userId === this.session.userId || peerIds.has(state.userId)) {
+          return [];
+        }
+
+        peerIds.add(state.userId);
+        return [state];
+      }
+    );
 
     return {
       columnOrder: this.columnOrder.toArray(),
