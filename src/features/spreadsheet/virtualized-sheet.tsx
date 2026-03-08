@@ -1833,15 +1833,6 @@ export function VirtualizedSheet({
               width: gridWidth,
             }}
           >
-            <SelectionOverlay
-              activeCellLayout={activeCellLayout}
-              columnLayout={columnLayout}
-              peers={peers}
-              rowLayout={rowLayout}
-              selectionRect={selectionRect}
-              showCrosshairHighlight={showCrosshairHighlight}
-            />
-
             {visibleRows.flatMap((row) =>
               visibleColumns.map((column) => (
                 <VirtualCell
@@ -1881,6 +1872,15 @@ export function VirtualizedSheet({
               viewport={viewport}
               visibleColumns={visibleColumns}
               visibleRows={visibleRows}
+            />
+
+            <SelectionOverlay
+              activeCellLayout={activeCellLayout}
+              columnLayout={columnLayout}
+              peers={peers}
+              rowLayout={rowLayout}
+              selectionRect={selectionRect}
+              showCrosshairHighlight={showCrosshairHighlight}
             />
 
             <DragReorderIndicator
