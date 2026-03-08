@@ -4,7 +4,22 @@ export interface CellAddress {
 }
 
 export type CellKind = "formula" | "number" | "text";
-export const CELL_FONT_FAMILIES = ["display", "mono", "sans", "serif"] as const;
+export const CELL_FONT_FAMILIES = [
+  "display",
+  "mono",
+  "open-sans",
+  "roboto",
+  "montserrat",
+  "lato",
+  "roboto-slab",
+  "poppins",
+  "source-sans-3",
+  "raleway",
+  "oswald",
+  "roboto-condensed",
+  "sans",
+  "serif",
+] as const;
 export type CellFontFamily = (typeof CELL_FONT_FAMILIES)[number];
 export const CELL_FONT_SIZES = [12, 14, 16, 18, 20] as const;
 export type CellFontSize = (typeof CELL_FONT_SIZES)[number];

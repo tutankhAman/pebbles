@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { JetBrains_Mono, Plus_Jakarta_Sans } from "next/font/google";
+import { spreadsheetGoogleFontVariables } from "@/features/spreadsheet/google-fonts";
 import { AppProviders } from "@/providers/app-providers";
 import "./globals.css";
 
@@ -29,7 +30,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body
-        className={`${displayFont.variable} ${bodyFont.variable} bg-[var(--background)] text-[var(--foreground)] antialiased`}
+        className={`${displayFont.variable} ${bodyFont.variable} ${spreadsheetGoogleFontVariables} bg-[var(--background)] text-[var(--foreground)] antialiased`}
       >
         <AppProviders>{children}</AppProviders>
       </body>

@@ -1,18 +1,11 @@
 import type { CSSProperties } from "react";
+import { CELL_FONT_FAMILY_STYLES } from "@/features/spreadsheet/cell-fonts";
 import { getResolvedHorizontalAlign } from "@/features/spreadsheet/cell-formatting";
 import type {
-  CellFontFamily,
   CellFormatRecord,
   CellRecord,
   ComputedValue,
 } from "@/types/spreadsheet";
-
-const CELL_FONT_FAMILY_STYLES: Record<CellFontFamily, string> = {
-  display: 'var(--font-display), "Segoe UI", sans-serif',
-  mono: 'var(--font-body), "SFMono-Regular", Consolas, monospace',
-  sans: '"Helvetica Neue", Arial, sans-serif',
-  serif: 'Georgia, "Times New Roman", serif',
-};
 
 function getCellBackgroundColor(args: {
   format: CellFormatRecord | null;
@@ -45,7 +38,14 @@ export function getHeaderBackgroundColor(
   return "#f8f9fa";
 }
 
-export function getToolbarButtonClassName(isActive: boolean) {
+export function getToolbarButtonClassName(
+  isActive: boolean,
+  isDisabled = false
+) {
+  if (isDisabled) {
+    return "flex h-7 min-w-7 items-center justify-center px-[0.375rem] text-[0.8125rem] text-[#9aa0a6] opacity-60";
+  }
+
   return `flex h-7 min-w-7 items-center justify-center px-[0.375rem] text-[0.8125rem] transition-colors ${
     isActive
       ? "bg-[#e8f0fe] text-[#1a73e8]"

@@ -1,3 +1,4 @@
+import { CELL_FONT_FAMILY_LABELS } from "@/features/spreadsheet/cell-fonts";
 import { SparseSheet } from "@/features/spreadsheet/sparse-sheet";
 import type { HelpPanel } from "@/features/spreadsheet/types/virtualized-sheet";
 import type { CellFontFamily, CellRecord } from "@/types/spreadsheet";
@@ -34,16 +35,7 @@ export function getSelectionMatrix(
 }
 
 export function getFontFamilyLabel(fontFamily: CellFontFamily) {
-  switch (fontFamily) {
-    case "display":
-      return "Display";
-    case "mono":
-      return "Mono";
-    case "sans":
-      return "Sans";
-    default:
-      return "Serif";
-  }
+  return CELL_FONT_FAMILY_LABELS[fontFamily];
 }
 
 export function getHelpPanelTitle(activeHelpPanel: HelpPanel) {
