@@ -1,16 +1,5 @@
 "use client";
 
-import {
-  AlignCenter,
-  AlignLeft,
-  AlignRight,
-  Baseline,
-  Bold,
-  Italic,
-  PaintBucket,
-  Type,
-  Underline,
-} from "lucide-react";
 import { useRouter } from "next/navigation";
 import {
   type ClipboardEvent,
@@ -37,6 +26,43 @@ import {
   createJsonExport,
 } from "@/features/spreadsheet/export";
 import {
+  captureLayoutState,
+  createSeededSheet,
+  formatWriteState,
+  getCellDisplayValue,
+  getCellKind,
+  getSelectionMatrix,
+} from "@/features/spreadsheet/functions/virtualized-sheet-display";
+import {
+  downloadExport,
+  sanitizeFileName,
+} from "@/features/spreadsheet/functions/virtualized-sheet-file";
+import {
+  findCellMatches,
+  type SearchMatch,
+  sortRowsByColumn,
+} from "@/features/spreadsheet/functions/virtualized-sheet-search";
+import {
+  handleFormatAndInsertShortcuts,
+  handleInsertShortcuts,
+  handleMetaShortcuts,
+  handleNavigationShortcuts,
+  handleViewShortcuts,
+  type ShortcutHandlerArgs,
+} from "@/features/spreadsheet/functions/virtualized-sheet-shortcuts";
+import { getHeaderBackgroundColor } from "@/features/spreadsheet/functions/virtualized-sheet-styles";
+import {
+  applyRemoteChanges,
+  commitHeaderDrag,
+  getSnapshotChanges,
+  hasSnapshotChanges,
+} from "@/features/spreadsheet/functions/virtualized-sheet-sync";
+import {
+  DEFAULT_VIEWPORT_HEIGHT,
+  DEFAULT_VIEWPORT_WIDTH,
+  useVirtualViewport,
+} from "@/features/spreadsheet/hooks/use-virtual-viewport";
+import {
   createCellSelection,
   createRangeSelection,
   getNavigationDelta,
@@ -57,47 +83,6 @@ import {
   getAxisVisibleSlice,
 } from "@/features/spreadsheet/sheet-layout";
 import { SparseSheet } from "@/features/spreadsheet/sparse-sheet";
-import {
-  DEFAULT_VIEWPORT_HEIGHT,
-  DEFAULT_VIEWPORT_WIDTH,
-  useVirtualViewport,
-} from "@/features/spreadsheet/use-virtual-viewport";
-import {
-  DEFAULT_SHEET_METRICS,
-  getCellAddressFromPoint,
-  getCellLayout,
-  getColumnHeaderLabel,
-  getGridDimensions,
-} from "@/features/spreadsheet/viewport";
-import {
-  applyRemoteChanges,
-  captureLayoutState,
-  commitHeaderDrag,
-  createSeededSheet,
-  downloadExport,
-  findCellMatches,
-  formatWriteState,
-  getCellDisplayValue,
-  getCellKind,
-  getFontFamilyLabel,
-  getHeaderBackgroundColor,
-  getHelpPanelTitle,
-  getSelectionMatrix,
-  getSnapshotChanges,
-  getToolbarButtonClassName,
-  hasSnapshotChanges,
-  type SearchMatch,
-  sanitizeFileName,
-  sortRowsByColumn,
-} from "@/features/spreadsheet/virtualized-sheet-helpers";
-import {
-  handleFormatAndInsertShortcuts,
-  handleInsertShortcuts,
-  handleMetaShortcuts,
-  handleNavigationShortcuts,
-  handleViewShortcuts,
-  type ShortcutHandlerArgs,
-} from "@/features/spreadsheet/virtualized-sheet-shortcuts";
 import type {
   EditorSurface,
   HeaderDragState,
@@ -106,29 +91,30 @@ import type {
   KeyedChange,
   MenuKey,
   SnapshotChanges,
-} from "@/features/spreadsheet/virtualized-sheet-types";
+} from "@/features/spreadsheet/types/virtualized-sheet";
+import { HelpPanelDialog } from "@/features/spreadsheet/ui/help-panel-dialog";
+import { RenameSheetDialog } from "@/features/spreadsheet/ui/rename-sheet-dialog";
+import { SearchPanel } from "@/features/spreadsheet/ui/search-panel";
+import { SheetMenuBar } from "@/features/spreadsheet/ui/sheet-menu-bar";
+import { SheetToolbar } from "@/features/spreadsheet/ui/sheet-toolbar";
+import { VirtualCell } from "@/features/spreadsheet/ui/virtual-cell";
 import {
-  createShortcutLabel,
-  MenuButton,
-  MenuItem,
-  SearchIcon,
-  SortAscendingIcon,
-  SortDescendingIcon,
-  VirtualCell,
-} from "@/features/spreadsheet/virtualized-sheet-ui";
+  DEFAULT_SHEET_METRICS,
+  getCellAddressFromPoint,
+  getCellLayout,
+  getColumnHeaderLabel,
+  getGridDimensions,
+} from "@/features/spreadsheet/viewport";
 import { renameDocument, touchDocument } from "@/lib/metadata/metadata-store";
 import type { CollaborationPresenceSnapshot } from "@/types/collaboration";
 import type { DocumentMeta, SessionIdentity } from "@/types/metadata";
 import type {
   CellAddress,
-  CellFontFamily,
-  CellFontSize,
   CellFormat,
   CellFormatRecord,
   CellRecord,
   Selection,
 } from "@/types/spreadsheet";
-import { CELL_FONT_FAMILIES, CELL_FONT_SIZES } from "@/types/spreadsheet";
 import type { EditorMode, WriteState } from "@/types/ui";
 import type { SparseSheetSnapshot } from "./sparse-sheet";
 
@@ -1812,767 +1798,80 @@ export function VirtualizedSheet({
         value=""
       />
 
-      <div className="relative bg-white px-2 py-0.5" data-menu-root>
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-0.5">
-            {(
-              ["file", "edit", "view", "insert", "format", "help"] as const
-            ).map((menuKey) => (
-              <MenuButton
-                isOpen={activeMenu === menuKey}
-                key={menuKey}
-                label={menuKey}
-                onClick={() => {
-                  setActiveMenu((current) =>
-                    current === menuKey ? null : menuKey
-                  );
-                }}
-              />
-            ))}
-          </div>
-          <div className="flex items-center gap-3 pr-1 text-[#80868b] text-[0.6875rem]">
-            <span className="font-mono text-[#5f6368]">
-              {getColumnHeaderLabel(activeCell.col)}
-              {activeCell.row}
-            </span>
-            <span className="font-mono">
-              {selectionDimensions.rowCount} x {selectionDimensions.colCount}
-            </span>
-            <span className="font-mono">{formatWriteState(writeState)}</span>
-          </div>
-        </div>
+      <SheetMenuBar
+        activeCell={activeCell}
+        activeCellAlignment={activeCellAlignment}
+        activeCellFormat={activeCellFormat}
+        activeFontFamily={activeFontFamily}
+        activeFontSize={activeFontSize}
+        activeMenu={activeMenu}
+        applyFormattingPatch={applyFormattingPatch}
+        canRedo={historyRef.current.future.length > 0}
+        canUndo={historyRef.current.past.length > 0}
+        clearSelectionContents={clearSelectionContents}
+        clearSelectionFormatting={clearSelectionFormatting}
+        closeMenus={closeMenus}
+        copySelectionContents={copySelectionContents}
+        cutSelectionContents={cutSelectionContents}
+        freezeFirstColumn={freezeFirstColumn}
+        freezeTopRow={freezeTopRow}
+        handleExport={handleExport}
+        insertColumn={insertColumn}
+        insertRow={insertRow}
+        onBackToDashboard={() => {
+          router.push("/dashboard");
+        }}
+        onToggleMenu={(menuKey) => {
+          setActiveMenu((current) => (current === menuKey ? null : menuKey));
+        }}
+        openRenameDialog={openRenameDialog}
+        openSearchPanel={openSearchPanel}
+        pasteSelectionContents={pasteSelectionContents}
+        redoSelectionChange={redoSelectionChange}
+        selectionDimensions={selectionDimensions}
+        setActiveHelpPanel={setActiveHelpPanel}
+        setFreezeFirstColumn={setFreezeFirstColumn}
+        setFreezeTopRow={setFreezeTopRow}
+        setShowCrosshairHighlight={setShowCrosshairHighlight}
+        setShowFormulaBar={setShowFormulaBar}
+        setShowGridlines={setShowGridlines}
+        showCrosshairHighlight={showCrosshairHighlight}
+        showFormulaBar={showFormulaBar}
+        showGridlines={showGridlines}
+        sortSelectionRows={sortSelectionRows}
+        undoSelectionChange={undoSelectionChange}
+        writeStateLabel={formatWriteState(writeState)}
+      />
 
-        {activeMenu ? (
-          <div className="absolute top-full left-2 z-40 mt-0.5 min-w-[17rem] rounded-lg border border-[#e0e0e0] bg-white py-1.5 shadow-[0_2px_6px_2px_rgba(60,64,67,0.15),0_1px_2px_rgba(60,64,67,0.3)]">
-            {activeMenu === "file" ? (
-              <div className="grid gap-0.5 px-1">
-                <MenuItem
-                  label="Export CSV"
-                  onClick={() => {
-                    handleExport("csv");
-                    closeMenus();
-                  }}
-                />
-                <MenuItem
-                  label="Export TSV"
-                  onClick={() => {
-                    handleExport("tsv");
-                    closeMenus();
-                  }}
-                />
-                <MenuItem
-                  label="Export JSON"
-                  onClick={() => {
-                    handleExport("json");
-                    closeMenus();
-                  }}
-                />
-                <MenuItem
-                  label="Rename sheet/document"
-                  onClick={openRenameDialog}
-                  shortcut="F2"
-                />
-                <MenuItem
-                  label="Back to dashboard"
-                  onClick={() => {
-                    router.push("/dashboard");
-                  }}
-                />
-              </div>
-            ) : null}
-
-            {activeMenu === "edit" ? (
-              <div className="grid gap-0.5 px-1">
-                <MenuItem
-                  disabled={historyRef.current.past.length === 0}
-                  label="Undo"
-                  onClick={() => {
-                    undoSelectionChange();
-                    closeMenus();
-                  }}
-                  shortcut="Mod+Z"
-                />
-                <MenuItem
-                  disabled={historyRef.current.future.length === 0}
-                  label="Redo"
-                  onClick={() => {
-                    redoSelectionChange();
-                    closeMenus();
-                  }}
-                  shortcut="Mod+Shift+Z"
-                />
-                <MenuItem
-                  label="Cut"
-                  onClick={() => {
-                    cutSelectionContents().catch(() => undefined);
-                    closeMenus();
-                  }}
-                  shortcut="Mod+X"
-                />
-                <MenuItem
-                  label="Copy"
-                  onClick={() => {
-                    copySelectionContents().catch(() => undefined);
-                    closeMenus();
-                  }}
-                  shortcut="Mod+C"
-                />
-                <MenuItem
-                  label="Paste"
-                  onClick={() => {
-                    pasteSelectionContents().catch(() => undefined);
-                    closeMenus();
-                  }}
-                  shortcut="Mod+V"
-                />
-                <MenuItem
-                  label="Find and replace"
-                  onClick={openSearchPanel}
-                  shortcut="Mod+F"
-                />
-                <MenuItem
-                  label="Sort ascending"
-                  onClick={() => {
-                    sortSelectionRows("asc");
-                    closeMenus();
-                  }}
-                />
-                <MenuItem
-                  label="Sort descending"
-                  onClick={() => {
-                    sortSelectionRows("desc");
-                    closeMenus();
-                  }}
-                />
-                <MenuItem
-                  label="Clear cells"
-                  onClick={() => {
-                    clearSelectionContents();
-                    closeMenus();
-                  }}
-                  shortcut="Delete"
-                />
-                <MenuItem
-                  label="Clear formatting"
-                  onClick={() => {
-                    clearSelectionFormatting();
-                    closeMenus();
-                  }}
-                  shortcut="Alt+Shift+X"
-                />
-              </div>
-            ) : null}
-
-            {activeMenu === "view" ? (
-              <div className="grid gap-0.5 px-1">
-                <MenuItem
-                  checked={showFormulaBar}
-                  label="Show formula bar"
-                  onClick={() => {
-                    setShowFormulaBar((current) => !current);
-                    closeMenus();
-                  }}
-                  shortcut="Mod+/"
-                />
-                <MenuItem
-                  checked={showGridlines}
-                  label="Show gridlines"
-                  onClick={() => {
-                    setShowGridlines((current) => !current);
-                    closeMenus();
-                  }}
-                  shortcut="Alt+G"
-                />
-                <MenuItem
-                  checked={showCrosshairHighlight}
-                  label="Full row/column highlight"
-                  onClick={() => {
-                    setShowCrosshairHighlight((current) => !current);
-                    closeMenus();
-                  }}
-                  shortcut="Alt+H"
-                />
-                <MenuItem
-                  checked={freezeTopRow}
-                  label="Freeze top row"
-                  onClick={() => {
-                    setFreezeTopRow((current) => !current);
-                    closeMenus();
-                  }}
-                  shortcut="Alt+Shift+T"
-                />
-                <MenuItem
-                  checked={freezeFirstColumn}
-                  label="Freeze first column"
-                  onClick={() => {
-                    setFreezeFirstColumn((current) => !current);
-                    closeMenus();
-                  }}
-                  shortcut="Alt+Shift+1"
-                />
-              </div>
-            ) : null}
-
-            {activeMenu === "insert" ? (
-              <div className="grid gap-0.5 px-1">
-                <MenuItem
-                  label="Row above"
-                  onClick={() => {
-                    insertRow("above");
-                    closeMenus();
-                  }}
-                  shortcut="Alt+Shift+Up"
-                />
-                <MenuItem
-                  label="Row below"
-                  onClick={() => {
-                    insertRow("below");
-                    closeMenus();
-                  }}
-                  shortcut="Alt+Shift+Down"
-                />
-                <MenuItem
-                  label="Column left"
-                  onClick={() => {
-                    insertColumn("left");
-                    closeMenus();
-                  }}
-                  shortcut="Alt+Shift+Left"
-                />
-                <MenuItem
-                  label="Column right"
-                  onClick={() => {
-                    insertColumn("right");
-                    closeMenus();
-                  }}
-                  shortcut="Alt+Shift+Right"
-                />
-              </div>
-            ) : null}
-
-            {activeMenu === "format" ? (
-              <div className="grid gap-2 px-1">
-                <div className="flex flex-wrap items-center gap-3 rounded border border-[#e0e0e0] bg-[#f8f9fa] px-3 py-2.5">
-                  <label className="flex items-center gap-2 text-[0.8125rem]">
-                    <span className="text-[#5f6368]">Font</span>
-                    <select
-                      className="rounded border border-[#dadce0] bg-white px-3 py-1 text-[0.8125rem] outline-none"
-                      onChange={(event) => {
-                        const nextFontFamily = event.target.value;
-
-                        applyFormattingPatch({
-                          fontFamily:
-                            nextFontFamily === ""
-                              ? undefined
-                              : (nextFontFamily as CellFontFamily),
-                        });
-                      }}
-                      value={activeFontFamily}
-                    >
-                      <option value="">Default</option>
-                      {CELL_FONT_FAMILIES.map((fontFamily) => (
-                        <option key={fontFamily} value={fontFamily}>
-                          {getFontFamilyLabel(fontFamily)}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="flex items-center gap-2 text-[0.8125rem]">
-                    <span className="text-[#5f6368]">Size</span>
-                    <select
-                      className="rounded border border-[#dadce0] bg-white px-3 py-1 text-[0.8125rem] outline-none"
-                      onChange={(event) => {
-                        const nextFontSize = event.target.value;
-
-                        applyFormattingPatch({
-                          fontSize:
-                            nextFontSize === ""
-                              ? undefined
-                              : (Number(nextFontSize) as CellFontSize),
-                        });
-                      }}
-                      value={activeFontSize}
-                    >
-                      <option value="">Auto</option>
-                      {CELL_FONT_SIZES.map((fontSize) => (
-                        <option key={fontSize} value={fontSize}>
-                          {fontSize}px
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="flex items-center gap-2 text-[0.8125rem]">
-                    <span className="text-[#5f6368]">Text</span>
-                    <input
-                      className="h-7 w-9 rounded border border-[#dadce0]"
-                      onChange={(event) => {
-                        applyFormattingPatch({
-                          textColor: event.target.value,
-                        });
-                      }}
-                      type="color"
-                      value={activeCellFormat?.textColor ?? "#172333"}
-                    />
-                  </label>
-                  <label className="flex items-center gap-2 text-[0.8125rem]">
-                    <span className="text-[#5f6368]">Fill</span>
-                    <input
-                      className="h-7 w-9 rounded border border-[#dadce0]"
-                      onChange={(event) => {
-                        applyFormattingPatch({
-                          backgroundColor: event.target.value,
-                        });
-                      }}
-                      type="color"
-                      value={activeCellFormat?.backgroundColor ?? "#ffffff"}
-                    />
-                  </label>
-                </div>
-                <div className="grid gap-0.5">
-                  <MenuItem
-                    checked={Boolean(activeCellFormat?.bold)}
-                    label="Bold"
-                    onClick={() => {
-                      applyFormattingPatch({
-                        bold: !activeCellFormat?.bold,
-                      });
-                      closeMenus();
-                    }}
-                    shortcut="Mod+B"
-                  />
-                  <MenuItem
-                    checked={Boolean(activeCellFormat?.italic)}
-                    label="Italic"
-                    onClick={() => {
-                      applyFormattingPatch({
-                        italic: !activeCellFormat?.italic,
-                      });
-                      closeMenus();
-                    }}
-                    shortcut="Mod+I"
-                  />
-                  <MenuItem
-                    checked={Boolean(activeCellFormat?.underline)}
-                    label="Underline"
-                    onClick={() => {
-                      applyFormattingPatch({
-                        underline: !activeCellFormat?.underline,
-                      });
-                      closeMenus();
-                    }}
-                    shortcut="Mod+U"
-                  />
-                  <MenuItem
-                    checked={activeCellAlignment === "left"}
-                    label="Align left"
-                    onClick={() => {
-                      applyFormattingPatch({
-                        align:
-                          activeCellFormat?.align === "left"
-                            ? undefined
-                            : "left",
-                      });
-                      closeMenus();
-                    }}
-                    shortcut="Alt+Shift+L"
-                  />
-                  <MenuItem
-                    checked={activeCellAlignment === "center"}
-                    label="Align center"
-                    onClick={() => {
-                      applyFormattingPatch({
-                        align:
-                          activeCellFormat?.align === "center"
-                            ? undefined
-                            : "center",
-                      });
-                      closeMenus();
-                    }}
-                    shortcut="Alt+Shift+E"
-                  />
-                  <MenuItem
-                    checked={activeCellAlignment === "right"}
-                    label="Align right"
-                    onClick={() => {
-                      applyFormattingPatch({
-                        align:
-                          activeCellFormat?.align === "right"
-                            ? undefined
-                            : "right",
-                      });
-                      closeMenus();
-                    }}
-                    shortcut="Alt+Shift+R"
-                  />
-                </div>
-              </div>
-            ) : null}
-
-            {activeMenu === "help" ? (
-              <div className="grid gap-0.5 px-1">
-                <MenuItem
-                  label="Keyboard shortcuts"
-                  onClick={() => {
-                    setActiveHelpPanel("shortcuts");
-                    closeMenus();
-                  }}
-                  shortcut="Shift+?"
-                />
-                <MenuItem
-                  label="Formula examples"
-                  onClick={() => {
-                    setActiveHelpPanel("formulas");
-                    closeMenus();
-                  }}
-                />
-                <MenuItem
-                  label="About this sheet"
-                  onClick={() => {
-                    setActiveHelpPanel("about");
-                    closeMenus();
-                  }}
-                />
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-      </div>
-
+      <SheetToolbar
+        activeCell={activeCell}
+        activeCellAlignment={activeCellAlignment}
+        activeCellFormat={activeCellFormat}
+        activeFontFamily={activeFontFamily}
+        activeFontSize={activeFontSize}
+        applyFormattingPatch={applyFormattingPatch}
+        isSearchPanelOpen={isSearchPanelOpen}
+        setIsSearchPanelOpen={setIsSearchPanelOpen}
+        sortSelectionRows={sortSelectionRows}
+      />
+      {isSearchPanelOpen ? (
+        <SearchPanel
+          activeSearchMatchIndex={activeSearchMatchIndex}
+          closeSearchPanel={closeSearchPanel}
+          isSearchCaseSensitive={isSearchCaseSensitive}
+          jumpToSearchMatch={jumpToSearchMatch}
+          replaceAllSearchMatches={replaceAllSearchMatches}
+          replaceCurrentSearchMatch={replaceCurrentSearchMatch}
+          replaceValue={replaceValue}
+          searchInputRef={searchInputRef}
+          searchMatches={searchMatches}
+          searchQuery={searchQuery}
+          setIsSearchCaseSensitive={setIsSearchCaseSensitive}
+          setReplaceValue={setReplaceValue}
+          setSearchQuery={setSearchQuery}
+        />
+      ) : null}
       <div className="border-[#e0e3e7] border-b bg-[#f8f9fa]">
-        <div className="flex flex-wrap items-center gap-[0.375rem] px-3 py-[0.375rem]">
-          <div className="flex items-center gap-0.5 bg-white p-[0.1875rem] shadow-sm ring-1 ring-[#e0e3e7]">
-            <label
-              className="flex h-7 items-center gap-1.5 px-1.5 text-[#444746] transition-colors hover:bg-[#f1f3f4]"
-              title="Font family"
-            >
-              <Type className="h-[0.875rem] w-[0.875rem] stroke-[2] text-[#5f6368]" />
-              <span className="sr-only">Font family</span>
-              <select
-                aria-label="Cell font family"
-                className="h-full min-w-[5.75rem] bg-transparent text-[0.75rem] leading-none outline-none"
-                onChange={(event) => {
-                  const nextFontFamily = event.target.value;
-
-                  applyFormattingPatch({
-                    fontFamily:
-                      nextFontFamily === ""
-                        ? undefined
-                        : (nextFontFamily as CellFontFamily),
-                  });
-                }}
-                value={activeFontFamily}
-              >
-                <option value="">Default</option>
-                {CELL_FONT_FAMILIES.map((fontFamily) => (
-                  <option key={fontFamily} value={fontFamily}>
-                    {getFontFamilyLabel(fontFamily)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label
-              className="flex h-7 items-center gap-1.5 px-1.5 text-[#444746] transition-colors hover:bg-[#f1f3f4]"
-              title="Font size"
-            >
-              <Type className="h-[0.875rem] w-[0.875rem] stroke-[2] text-[#5f6368]" />
-              <span className="sr-only">Font size</span>
-              <select
-                aria-label="Cell font size"
-                className="h-full w-11 bg-transparent text-[0.75rem] leading-none outline-none"
-                onChange={(event) => {
-                  const nextFontSize = event.target.value;
-
-                  applyFormattingPatch({
-                    fontSize:
-                      nextFontSize === ""
-                        ? undefined
-                        : (Number(nextFontSize) as CellFontSize),
-                  });
-                }}
-                value={activeFontSize}
-              >
-                <option value="">Auto</option>
-                {CELL_FONT_SIZES.map((fontSize) => (
-                  <option key={fontSize} value={fontSize}>
-                    {fontSize}px
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-
-          <div className="flex items-center gap-0.5 bg-white p-[0.1875rem] shadow-sm ring-1 ring-[#e0e3e7]">
-            <button
-              aria-label="Bold"
-              className={getToolbarButtonClassName(
-                Boolean(activeCellFormat?.bold)
-              )}
-              onClick={() => {
-                applyFormattingPatch({
-                  bold: !activeCellFormat?.bold,
-                });
-              }}
-              title="Bold"
-              type="button"
-            >
-              <Bold className="h-4 w-4 stroke-[2.5]" />
-            </button>
-            <button
-              aria-label="Italic"
-              className={getToolbarButtonClassName(
-                Boolean(activeCellFormat?.italic)
-              )}
-              onClick={() => {
-                applyFormattingPatch({
-                  italic: !activeCellFormat?.italic,
-                });
-              }}
-              title="Italic"
-              type="button"
-            >
-              <Italic className="h-4 w-4 stroke-[2.5]" />
-            </button>
-            <button
-              aria-label="Underline"
-              className={getToolbarButtonClassName(
-                Boolean(activeCellFormat?.underline)
-              )}
-              onClick={() => {
-                applyFormattingPatch({
-                  underline: !activeCellFormat?.underline,
-                });
-              }}
-              title="Underline"
-              type="button"
-            >
-              <Underline className="h-4 w-4 stroke-[2.5]" />
-            </button>
-          </div>
-
-          <div className="flex items-center gap-0.5 bg-white p-[0.1875rem] shadow-sm ring-1 ring-[#e0e3e7]">
-            <label
-              className="flex h-7 items-center gap-1.5 px-1.5 text-[#444746] transition-colors hover:bg-[#f1f3f4]"
-              title="Text color"
-            >
-              <Baseline className="h-[0.875rem] w-[0.875rem] stroke-[2] text-[#5f6368]" />
-              <span className="sr-only">Text color</span>
-              <input
-                aria-label="Cell text color"
-                className="h-full w-5 cursor-pointer border-none bg-transparent p-0"
-                onChange={(event) => {
-                  applyFormattingPatch({
-                    textColor: event.target.value,
-                  });
-                }}
-                title="Text color"
-                type="color"
-                value={activeCellFormat?.textColor ?? "#172333"}
-              />
-            </label>
-            <label
-              className="flex h-7 items-center gap-1.5 px-1.5 text-[#444746] transition-colors hover:bg-[#f1f3f4]"
-              title="Fill color"
-            >
-              <PaintBucket className="h-[0.875rem] w-[0.875rem] stroke-[2] text-[#5f6368]" />
-              <span className="sr-only">Fill color</span>
-              <input
-                aria-label="Cell fill color"
-                className="h-full w-5 cursor-pointer border-none bg-transparent p-0"
-                onChange={(event) => {
-                  applyFormattingPatch({
-                    backgroundColor: event.target.value,
-                  });
-                }}
-                title="Fill color"
-                type="color"
-                value={activeCellFormat?.backgroundColor ?? "#ffffff"}
-              />
-            </label>
-          </div>
-
-          <div className="flex items-center gap-0.5 bg-white p-[0.1875rem] shadow-sm ring-1 ring-[#e0e3e7]">
-            {(
-              [
-                {
-                  alignment: "left" as const,
-                  icon: <AlignLeft className="h-4 w-4" />,
-                  label: "Align left",
-                },
-                {
-                  alignment: "center" as const,
-                  icon: <AlignCenter className="h-4 w-4" />,
-                  label: "Align center",
-                },
-                {
-                  alignment: "right" as const,
-                  icon: <AlignRight className="h-4 w-4" />,
-                  label: "Align right",
-                },
-              ] as const
-            ).map(({ alignment, icon, label }) => (
-              <button
-                aria-label={label}
-                className={getToolbarButtonClassName(
-                  activeCellAlignment === alignment
-                )}
-                key={alignment}
-                onClick={() => {
-                  applyFormattingPatch({
-                    align:
-                      activeCellFormat?.align === alignment
-                        ? undefined
-                        : alignment,
-                  });
-                }}
-                title={label}
-                type="button"
-              >
-                {icon}
-              </button>
-            ))}
-          </div>
-
-          <div className="flex items-center gap-0.5 bg-white p-[0.1875rem] shadow-sm ring-1 ring-[#e0e3e7]">
-            <button
-              aria-label={`Sort rows ascending by ${getColumnHeaderLabel(activeCell.col)}`}
-              className={getToolbarButtonClassName(false)}
-              onClick={() => {
-                sortSelectionRows("asc");
-              }}
-              title={`Sort ascending by ${getColumnHeaderLabel(activeCell.col)}`}
-              type="button"
-            >
-              <SortAscendingIcon />
-            </button>
-            <button
-              aria-label={`Sort rows descending by ${getColumnHeaderLabel(activeCell.col)}`}
-              className={getToolbarButtonClassName(false)}
-              onClick={() => {
-                sortSelectionRows("desc");
-              }}
-              title={`Sort descending by ${getColumnHeaderLabel(activeCell.col)}`}
-              type="button"
-            >
-              <SortDescendingIcon />
-            </button>
-            <button
-              aria-label="Find and replace"
-              className={getToolbarButtonClassName(isSearchPanelOpen)}
-              onClick={() => {
-                setIsSearchPanelOpen((current) => !current);
-              }}
-              title="Find and replace"
-              type="button"
-            >
-              <SearchIcon />
-            </button>
-          </div>
-        </div>
-        {isSearchPanelOpen ? (
-          <div className="grid gap-2 border-[#e0e0e0] border-t bg-white px-3 py-2">
-            <div className="flex flex-wrap items-center gap-2">
-              <label className="flex min-w-[15rem] flex-1 items-center gap-2 border border-[#d2d7de] bg-[#f8fafc] px-2.5 py-1.5 text-[#444746] text-[0.75rem] shadow-sm">
-                <SearchIcon />
-                <span className="sr-only">Find text</span>
-                <input
-                  aria-label="Find text"
-                  className="w-full bg-transparent text-[#202124] outline-none placeholder:text-[#9aa0a6]"
-                  onChange={(event) => {
-                    setSearchQuery(event.target.value);
-                  }}
-                  placeholder="Find across populated cells"
-                  ref={searchInputRef}
-                  value={searchQuery}
-                />
-              </label>
-              <label className="flex min-w-[15rem] flex-1 items-center gap-2 border border-[#d2d7de] bg-[#f8fafc] px-2.5 py-1.5 text-[#444746] text-[0.75rem] shadow-sm">
-                <span className="font-mono text-[#5f6368] text-[0.6875rem] uppercase tracking-[0.08em]">
-                  Repl
-                </span>
-                <span className="sr-only">Replace with</span>
-                <input
-                  aria-label="Replace with"
-                  className="w-full bg-transparent text-[#202124] outline-none placeholder:text-[#9aa0a6]"
-                  onChange={(event) => {
-                    setReplaceValue(event.target.value);
-                  }}
-                  placeholder="Replace with"
-                  value={replaceValue}
-                />
-              </label>
-              <label className="flex items-center gap-2 px-1 text-[#5f6368] text-[0.75rem]">
-                <input
-                  checked={isSearchCaseSensitive}
-                  className="h-3.5 w-3.5 accent-[#1a73e8]"
-                  onChange={(event) => {
-                    setIsSearchCaseSensitive(event.target.checked);
-                  }}
-                  type="checkbox"
-                />
-                Match case
-              </label>
-            </div>
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2 text-[#5f6368] text-[0.75rem]">
-                <span className="font-mono">
-                  {searchMatches.length === 0
-                    ? "0 matches"
-                    : `${activeSearchMatchIndex + 1 > 0 ? activeSearchMatchIndex + 1 : 1}/${searchMatches.length}`}
-                </span>
-                <span>Searching all populated cells</span>
-              </div>
-              <div className="flex flex-wrap items-center gap-1.5">
-                <button
-                  className="rounded border border-[#d2d7de] bg-white px-2.5 py-1 text-[#202124] text-[0.75rem] shadow-sm transition-colors hover:bg-[#f1f3f4] disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={searchMatches.length === 0}
-                  onClick={() => {
-                    jumpToSearchMatch("previous");
-                  }}
-                  type="button"
-                >
-                  Prev
-                </button>
-                <button
-                  className="rounded border border-[#d2d7de] bg-white px-2.5 py-1 text-[#202124] text-[0.75rem] shadow-sm transition-colors hover:bg-[#f1f3f4] disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={searchMatches.length === 0}
-                  onClick={() => {
-                    jumpToSearchMatch("next");
-                  }}
-                  type="button"
-                >
-                  Next
-                </button>
-                <button
-                  className="rounded border border-[#d2d7de] bg-white px-2.5 py-1 text-[#202124] text-[0.75rem] shadow-sm transition-colors hover:bg-[#f1f3f4] disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={
-                    searchMatches.length === 0 || searchQuery.trim() === ""
-                  }
-                  onClick={replaceCurrentSearchMatch}
-                  type="button"
-                >
-                  Replace
-                </button>
-                <button
-                  className="rounded border border-[#1a73e8] bg-[#1a73e8] px-2.5 py-1 text-[0.75rem] text-white shadow-sm transition-colors hover:bg-[#1557b0] disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={
-                    searchMatches.length === 0 || searchQuery.trim() === ""
-                  }
-                  onClick={replaceAllSearchMatches}
-                  type="button"
-                >
-                  Replace all
-                </button>
-                <button
-                  className="rounded border border-transparent px-2.5 py-1 text-[#5f6368] text-[0.75rem] transition-colors hover:bg-[#f1f3f4]"
-                  onClick={closeSearchPanel}
-                  type="button"
-                >
-                  Close
-                </button>
-              </div>
-            </div>
-          </div>
-        ) : null}
         {showFormulaBar ? (
           <div className="grid grid-cols-[5rem_2rem_minmax(0,1fr)_auto] items-center gap-0 border-[#e0e0e0] border-t">
             <div className="flex h-full items-center border-[#e0e0e0] border-r px-3 font-mono text-[#202124] text-[0.75rem]">
@@ -3020,133 +2319,28 @@ export function VirtualizedSheet({
       </div>
 
       {isRenameDialogOpen ? (
-        <div
-          className="absolute inset-0 z-50 flex items-center justify-center bg-[rgba(32,33,36,0.18)] px-4"
-          data-dialog-root
-        >
-          <div className="w-full max-w-md border border-[#dadce0] bg-white p-5 shadow-[0_20px_48px_rgba(32,33,36,0.18)]">
-            <p className="font-mono text-[#5f6368] text-[0.68rem] uppercase tracking-[0.18em]">
-              Rename sheet
-            </p>
-            <input
-              className="mt-4 w-full border border-[#dadce0] bg-white px-4 py-3 text-[0.84rem] outline-none"
-              onChange={(event) => {
-                setRenameDraft(event.target.value);
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  submitRename().catch(() => undefined);
-                }
-              }}
-              value={renameDraft}
-            />
-            <div className="mt-4 flex items-center justify-end gap-2">
-              <button
-                className="border border-[#dadce0] px-4 py-2 text-[0.76rem] uppercase tracking-[0.14em]"
-                onClick={() => {
-                  setIsRenameDialogOpen(false);
-                }}
-                type="button"
-              >
-                Cancel
-              </button>
-              <button
-                className="border border-[#16a34a] bg-[#16a34a] px-4 py-2 text-[0.76rem] text-white uppercase tracking-[0.14em]"
-                onClick={() => {
-                  submitRename().catch(() => undefined);
-                }}
-                type="button"
-              >
-                Save
-              </button>
-            </div>
-          </div>
-        </div>
+        <RenameSheetDialog
+          onClose={() => {
+            setIsRenameDialogOpen(false);
+          }}
+          onSubmit={() => {
+            submitRename().catch(() => undefined);
+          }}
+          renameDraft={renameDraft}
+          setRenameDraft={setRenameDraft}
+        />
       ) : null}
 
       {activeHelpPanel ? (
-        <div
-          className="absolute inset-0 z-50 flex items-center justify-center bg-[rgba(32,33,36,0.18)] px-4"
-          data-dialog-root
-        >
-          <div className="w-full max-w-2xl border border-[#dadce0] bg-white p-5 shadow-[0_20px_48px_rgba(32,33,36,0.18)]">
-            <div className="flex items-center justify-between gap-4">
-              <p className="font-mono text-[#5f6368] text-[0.68rem] uppercase tracking-[0.18em]">
-                {getHelpPanelTitle(activeHelpPanel)}
-              </p>
-              <button
-                className="border border-[#dadce0] px-4 py-2 text-[0.76rem] uppercase tracking-[0.14em]"
-                onClick={() => {
-                  setActiveHelpPanel(null);
-                }}
-                type="button"
-              >
-                Close
-              </button>
-            </div>
-
-            {activeHelpPanel === "shortcuts" ? (
-              <div className="mt-4 grid gap-2 text-[0.82rem]">
-                {[
-                  ["Rename sheet", "F2"],
-                  ["Undo", "Mod+Z"],
-                  ["Redo", "Mod+Shift+Z"],
-                  ["Find and replace", "Mod+F"],
-                  ["Cut", "Mod+X"],
-                  ["Copy", "Mod+C"],
-                  ["Paste", "Mod+V"],
-                  ["Bold", "Mod+B"],
-                  ["Italic", "Mod+I"],
-                  ["Underline", "Mod+U"],
-                  ["Toggle formula bar", "Mod+/"],
-                  ["Toggle gridlines", "Alt+G"],
-                  ["Toggle row/column highlight", "Alt+H"],
-                ].map(([label, shortcut]) => (
-                  <div
-                    className="flex items-center justify-between border border-[#dadce0] bg-[#f8f9fa] px-4 py-3"
-                    key={label}
-                  >
-                    <span>{label}</span>
-                    {createShortcutLabel(shortcut)}
-                  </div>
-                ))}
-              </div>
-            ) : null}
-
-            {activeHelpPanel === "formulas" ? (
-              <div className="mt-4 grid gap-3 text-[0.82rem]">
-                {["=A1+B1", "=SUM(A1:B5)", "=SUM(A1,C1,D1)", "=A5/B5"].map(
-                  (example) => (
-                    <div
-                      className="border border-[#dadce0] bg-[#f8f9fa] px-4 py-3 font-mono"
-                      key={example}
-                    >
-                      {example}
-                    </div>
-                  )
-                )}
-              </div>
-            ) : null}
-
-            {activeHelpPanel === "about" ? (
-              <div className="mt-4 grid gap-2 text-[0.82rem]">
-                <div className="border border-[#dadce0] bg-[#f8f9fa] px-4 py-3">
-                  <p>{document.title}</p>
-                  <p className="mt-2 text-[#5f6368]">
-                    {bounds.rowCount.toLocaleString()} rows ·{" "}
-                    {bounds.colCount.toLocaleString()} columns ·{" "}
-                    {sheet.cellCount.toLocaleString()} populated cells
-                  </p>
-                </div>
-                <div className="border border-[#dadce0] bg-[#f8f9fa] px-4 py-3 text-[#5f6368]">
-                  Sparse data, virtual rendering, and lightweight formatting
-                  metadata keep this editor fast even as the sheet grows.
-                </div>
-              </div>
-            ) : null}
-          </div>
-        </div>
+        <HelpPanelDialog
+          activeHelpPanel={activeHelpPanel}
+          bounds={bounds}
+          documentTitle={document.title}
+          onClose={() => {
+            setActiveHelpPanel(null);
+          }}
+          populatedCellCount={sheet.cellCount}
+        />
       ) : null}
     </section>
   );
