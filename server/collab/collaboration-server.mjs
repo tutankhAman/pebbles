@@ -135,6 +135,8 @@ async function createRoom(roomId) {
   return room;
 }
 
+const pendingRoomCreations = new Map();
+
 async function getOrCreateRoom(roomId) {
   const existingRoom = roomRegistry.get(roomId);
 
@@ -143,9 +145,20 @@ async function getOrCreateRoom(roomId) {
     return existingRoom;
   }
 
-  const room = await createRoom(roomId);
-  roomRegistry.set(roomId, room);
-  return room;
+  const pendingCreation = pendingRoomCreations.get(roomId);
+
+  if (pendingCreation) {
+    return await pendingCreation;
+  }
+
+  const creation = createRoom(roomId).then((room) => {
+    roomRegistry.set(roomId, room);
+    pendingRoomCreations.delete(roomId);
+    return room;
+  });
+
+  pendingRoomCreations.set(roomId, creation);
+  return await creation;
 }
 
 function getRoomIdFromUrl(requestUrl) {
