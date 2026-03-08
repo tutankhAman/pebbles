@@ -2,6 +2,7 @@
 
 import {
   type ClipboardEvent,
+  type CSSProperties,
   type KeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   startTransition,
@@ -17,6 +18,10 @@ import {
 } from "@/features/collaboration/use-collaboration-room";
 import { useFormulaEngine } from "@/features/formulas/use-formula-engine";
 import { createCellKey, parseCellKey } from "@/features/spreadsheet/addressing";
+import {
+  getRenderedCellValue,
+  getResolvedHorizontalAlign,
+} from "@/features/spreadsheet/cell-formatting";
 import { getVisibleWindow } from "@/features/spreadsheet/chunks";
 import {
   createDelimitedExport,
@@ -59,13 +64,17 @@ import { touchDocument } from "@/lib/metadata/metadata-store";
 import type { DocumentMeta, SessionIdentity } from "@/types/metadata";
 import type {
   CellAddress,
+  CellFontFamily,
+  CellFontSize,
   CellFormat,
   CellFormatRecord,
+  CellHorizontalAlignment,
   CellRecord,
   ComputedValue,
   Selection,
   Viewport,
 } from "@/types/spreadsheet";
+import { CELL_FONT_FAMILIES, CELL_FONT_SIZES } from "@/types/spreadsheet";
 import type { EditorMode, WriteState } from "@/types/ui";
 
 const DEFAULT_VIEWPORT_WIDTH = 960;
@@ -76,6 +85,12 @@ const DEFAULT_SELECTION: CellAddress = {
 };
 const RECONNECT_SETTLE_DELAY_MS = 220;
 const WRITE_CONFIRMATION_DELAY_MS = 180;
+const CELL_FONT_FAMILY_STYLES: Record<CellFontFamily, string> = {
+  display: 'var(--font-display), "Segoe UI", sans-serif',
+  mono: 'var(--font-body), "SFMono-Regular", Consolas, monospace',
+  sans: '"Helvetica Neue", Arial, sans-serif',
+  serif: 'Georgia, "Times New Roman", serif',
+};
 
 type EditorSurface = "cell" | "formula-bar";
 type ReorderAxis = "col" | "row";
@@ -127,30 +142,6 @@ function getCellDisplayValue(cell: CellRecord | null) {
   return cell?.raw ?? "";
 }
 
-function formatComputedValue(value: ComputedValue | undefined) {
-  if (value == null) {
-    return "";
-  }
-
-  return String(value);
-}
-
-function getRenderedCellValue(args: {
-  cell: CellRecord | null;
-  computedValue: ComputedValue | undefined;
-  formulaError: string | undefined;
-}) {
-  if (args.cell?.kind !== "formula") {
-    return getCellDisplayValue(args.cell);
-  }
-
-  if (args.formulaError) {
-    return "#ERROR";
-  }
-
-  return formatComputedValue(args.computedValue) || args.cell.raw;
-}
-
 function getCellKind(raw: string): CellRecord["kind"] {
   if (raw.startsWith("=")) {
     return "formula";
@@ -199,6 +190,74 @@ function getHeaderBackgroundColor(isActive: boolean, isSelected: boolean) {
   }
 
   return "transparent";
+}
+
+function getToolbarButtonClassName(isActive: boolean) {
+  return `rounded-full border px-3 py-2 text-sm transition-colors ${
+    isActive
+      ? "border-[var(--accent)] bg-[rgba(42,118,130,0.12)] text-[var(--accent)]"
+      : "border-[var(--border)] bg-white/80 hover:border-[rgba(42,118,130,0.2)]"
+  }`;
+}
+
+function getFontFamilyLabel(fontFamily: CellFontFamily) {
+  switch (fontFamily) {
+    case "display":
+      return "Display";
+    case "mono":
+      return "Mono";
+    case "sans":
+      return "Sans";
+    default:
+      return "Serif";
+  }
+}
+
+function getAlignmentLabel(alignment: CellHorizontalAlignment) {
+  switch (alignment) {
+    case "center":
+      return "Center";
+    case "right":
+      return "Right";
+    default:
+      return "Left";
+  }
+}
+
+function getCellContentStyle(args: {
+  cell: CellRecord | null;
+  computedValue: ComputedValue | undefined;
+  format: CellFormatRecord | null;
+  formulaError: string | undefined;
+  isActive: boolean;
+  isSelected: boolean;
+}): CSSProperties {
+  return {
+    backgroundColor: getCellBackgroundColor({
+      format: args.format,
+      isActive: args.isActive,
+      isSelected: args.isSelected,
+    }),
+    color: args.formulaError
+      ? "#b42318"
+      : (args.format?.textColor ?? "var(--foreground)"),
+    fontFamily: args.format?.fontFamily
+      ? CELL_FONT_FAMILY_STYLES[args.format.fontFamily]
+      : undefined,
+    fontSize: args.format?.fontSize ? `${args.format.fontSize}px` : undefined,
+    fontStyle: args.format?.italic ? "italic" : "normal",
+    fontWeight: args.format?.bold ? 700 : 400,
+    lineHeight: args.format?.fontSize
+      ? `${Math.max(20, args.format.fontSize + 6)}px`
+      : undefined,
+    textAlign: getResolvedHorizontalAlign({
+      cell: args.cell,
+      computedValue: args.computedValue,
+      format: args.format,
+      formulaError: args.formulaError,
+    }),
+    textDecorationLine: args.format?.underline ? "underline" : "none",
+  };
 }
 
 function formatWriteState(writeState: WriteState) {
@@ -487,6 +546,58 @@ function useVirtualViewport() {
   };
 }
 
+function VirtualCell({
+  address,
+  columnLayout,
+  computedValue,
+  format,
+  formulaError,
+  isActive,
+  isSelected,
+  record,
+  rowLayout,
+}: {
+  address: CellAddress;
+  columnLayout: import("@/types/spreadsheet").AxisLayout;
+  computedValue: ComputedValue | undefined;
+  format: CellFormatRecord | null;
+  formulaError: string | undefined;
+  isActive: boolean;
+  isSelected: boolean;
+  record: CellRecord | null;
+  rowLayout: import("@/types/spreadsheet").AxisLayout;
+}) {
+  const layout = getCellLayout(address, columnLayout, rowLayout);
+  const displayValue = getRenderedCellValue({
+    cell: record,
+    computedValue,
+    formulaError,
+  });
+
+  return (
+    <div
+      className="absolute overflow-hidden border-[var(--border)] border-r border-b px-3 py-2 text-[0.92rem] leading-6"
+      style={{
+        height: layout.height,
+        left: layout.left,
+        top: layout.top,
+        width: layout.width,
+        ...getCellContentStyle({
+          cell: record,
+          computedValue,
+          format,
+          formulaError,
+          isActive,
+          isSelected,
+        }),
+      }}
+      title={formulaError}
+    >
+      <div className="truncate">{displayValue}</div>
+    </div>
+  );
+}
+
 export function VirtualizedSheet({
   document,
   onWriteStateChange,
@@ -533,9 +644,14 @@ export function VirtualizedSheet({
   const { handleScroll, scrollRef, viewport } = useVirtualViewport();
   const activeCell =
     selection.type === "cell" ? selection.anchor : selection.end;
+  const activeCellKey = createCellKey(activeCell);
   const activeCellRecord = sheet.getCell(activeCell);
   const activeCellRaw = getCellDisplayValue(activeCellRecord);
   const activeCellFormat = sheet.getCellFormat(activeCell);
+  const activeFontFamily = activeCellFormat?.fontFamily ?? "";
+  const activeFontSize = activeCellFormat?.fontSize
+    ? String(activeCellFormat.fontSize)
+    : "";
   const { columnLayout, rowLayout } = useMemo(
     () =>
       createAxisLayouts(
@@ -644,6 +760,14 @@ export function VirtualizedSheet({
     bounds,
     initialCells: initialFormulaCells,
     visibleKeys,
+  });
+  const activeFormulaError = formulaErrors.get(activeCellKey);
+  const activeComputedValue = computedValues.get(activeCellKey);
+  const activeCellAlignment = getResolvedHorizontalAlign({
+    cell: activeCellRecord,
+    computedValue: activeComputedValue,
+    format: activeCellFormat,
+    formulaError: activeFormulaError,
   });
   const syncDocumentTimestamp = () => {
     touchDocument(document.id).catch(() => undefined);
@@ -1513,12 +1637,60 @@ export function VirtualizedSheet({
         </div>
         <div className="flex min-w-0 flex-col gap-3">
           <div className="flex flex-wrap items-center gap-2">
+            <label className="flex items-center gap-2 rounded-full border border-[var(--border)] bg-white/80 px-3 py-2 text-sm">
+              Font
+              <select
+                aria-label="Cell font family"
+                className="rounded-full border border-[var(--border)] bg-transparent px-3 py-1.5 text-sm outline-none"
+                onChange={(event) => {
+                  const nextFontFamily = event.target.value;
+
+                  applyFormattingPatch({
+                    fontFamily:
+                      nextFontFamily === ""
+                        ? undefined
+                        : (nextFontFamily as CellFontFamily),
+                  });
+                }}
+                value={activeFontFamily}
+              >
+                <option value="">Default</option>
+                {CELL_FONT_FAMILIES.map((fontFamily) => (
+                  <option key={fontFamily} value={fontFamily}>
+                    {getFontFamilyLabel(fontFamily)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex items-center gap-2 rounded-full border border-[var(--border)] bg-white/80 px-3 py-2 text-sm">
+              Size
+              <select
+                aria-label="Cell font size"
+                className="rounded-full border border-[var(--border)] bg-transparent px-3 py-1.5 text-sm outline-none"
+                onChange={(event) => {
+                  const nextFontSize = event.target.value;
+
+                  applyFormattingPatch({
+                    fontSize:
+                      nextFontSize === ""
+                        ? undefined
+                        : (Number(nextFontSize) as CellFontSize),
+                  });
+                }}
+                value={activeFontSize}
+              >
+                <option value="">Auto</option>
+                {CELL_FONT_SIZES.map((fontSize) => (
+                  <option key={fontSize} value={fontSize}>
+                    {fontSize}px
+                  </option>
+                ))}
+              </select>
+            </label>
             <button
-              className={`rounded-full border px-3 py-2 text-sm ${
-                activeCellFormat?.bold
-                  ? "border-[var(--accent)] bg-[rgba(42,118,130,0.12)] text-[var(--accent)]"
-                  : "border-[var(--border)] bg-white/80"
-              }`}
+              className={getToolbarButtonClassName(
+                Boolean(activeCellFormat?.bold)
+              )}
               onClick={() => {
                 applyFormattingPatch({
                   bold: !activeCellFormat?.bold,
@@ -1529,11 +1701,9 @@ export function VirtualizedSheet({
               Bold
             </button>
             <button
-              className={`rounded-full border px-3 py-2 text-sm ${
-                activeCellFormat?.italic
-                  ? "border-[var(--accent)] bg-[rgba(42,118,130,0.12)] text-[var(--accent)]"
-                  : "border-[var(--border)] bg-white/80"
-              }`}
+              className={getToolbarButtonClassName(
+                Boolean(activeCellFormat?.italic)
+              )}
               onClick={() => {
                 applyFormattingPatch({
                   italic: !activeCellFormat?.italic,
@@ -1542,6 +1712,19 @@ export function VirtualizedSheet({
               type="button"
             >
               Italic
+            </button>
+            <button
+              className={getToolbarButtonClassName(
+                Boolean(activeCellFormat?.underline)
+              )}
+              onClick={() => {
+                applyFormattingPatch({
+                  underline: !activeCellFormat?.underline,
+                });
+              }}
+              type="button"
+            >
+              Underline
             </button>
             <label className="flex items-center gap-2 rounded-full border border-[var(--border)] bg-white/80 px-3 py-2 text-sm">
               Text
@@ -1557,6 +1740,41 @@ export function VirtualizedSheet({
                 value={activeCellFormat?.textColor ?? "#172333"}
               />
             </label>
+            <label className="flex items-center gap-2 rounded-full border border-[var(--border)] bg-white/80 px-3 py-2 text-sm">
+              Fill
+              <input
+                aria-label="Cell fill color"
+                className="h-7 w-10 rounded-md border border-[var(--border)]"
+                onChange={(event) => {
+                  applyFormattingPatch({
+                    backgroundColor: event.target.value,
+                  });
+                }}
+                type="color"
+                value={activeCellFormat?.backgroundColor ?? "#ffffff"}
+              />
+            </label>
+            <div className="flex items-center gap-1 rounded-full border border-[var(--border)] bg-white/80 p-1">
+              {(["left", "center", "right"] as const).map((alignment) => (
+                <button
+                  className={getToolbarButtonClassName(
+                    activeCellAlignment === alignment
+                  )}
+                  key={alignment}
+                  onClick={() => {
+                    applyFormattingPatch({
+                      align:
+                        activeCellFormat?.align === alignment
+                          ? undefined
+                          : alignment,
+                    });
+                  }}
+                  type="button"
+                >
+                  {getAlignmentLabel(alignment)}
+                </button>
+              ))}
+            </div>
             <button
               className="rounded-full border border-[var(--border)] bg-white/80 px-3 py-2 text-sm"
               onClick={() => {
@@ -1780,54 +1998,29 @@ export function VirtualizedSheet({
             }}
           >
             {visibleRows.flatMap((row) =>
-              visibleColumns.map((column) => {
-                const address = { col: column, row };
-                const cellKey = createCellKey(address);
-                const layout = getCellLayout(address, columnLayout, rowLayout);
-                const cell = sheet.getCell(address);
-                const format = sheet.getCellFormat(address);
-                const isActive =
-                  activeCell.col === column && activeCell.row === row;
-                const isSelected = selectionContainsAddress(
-                  selection,
-                  address,
-                  columnLayout,
-                  rowLayout
-                );
-                const formulaError = formulaErrors.get(cellKey);
-                const computedValue = computedValues.get(cellKey);
-                const displayValue = getRenderedCellValue({
-                  cell,
-                  computedValue,
-                  formulaError,
-                });
-
-                return (
-                  <div
-                    className="absolute overflow-hidden border-[var(--border)] border-r border-b px-3 py-2 text-[0.92rem] leading-6"
-                    key={`${row}:${column}`}
-                    style={{
-                      backgroundColor: getCellBackgroundColor({
-                        format,
-                        isActive,
-                        isSelected,
-                      }),
-                      color: formulaError
-                        ? "#b42318"
-                        : (format?.textColor ?? "var(--foreground)"),
-                      fontStyle: format?.italic ? "italic" : "normal",
-                      fontWeight: format?.bold ? 700 : 400,
-                      height: layout.height,
-                      left: layout.left,
-                      top: layout.top,
-                      width: layout.width,
-                    }}
-                    title={formulaError}
-                  >
-                    <div className="truncate">{displayValue}</div>
-                  </div>
-                );
-              })
+              visibleColumns.map((column) => (
+                <VirtualCell
+                  address={{ col: column, row }}
+                  columnLayout={columnLayout}
+                  computedValue={computedValues.get(
+                    createCellKey({ col: column, row })
+                  )}
+                  format={sheet.getCellFormat({ col: column, row })}
+                  formulaError={formulaErrors.get(
+                    createCellKey({ col: column, row })
+                  )}
+                  isActive={activeCell.col === column && activeCell.row === row}
+                  isSelected={selectionContainsAddress(
+                    selection,
+                    { col: column, row },
+                    columnLayout,
+                    rowLayout
+                  )}
+                  key={`${row}:${column}`}
+                  record={sheet.getCell({ col: column, row })}
+                  rowLayout={rowLayout}
+                />
+              ))
             )}
 
             <div

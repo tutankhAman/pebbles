@@ -83,6 +83,48 @@ describe("SparseSheet", () => {
     assert.equal(sheet.cellCount, 1);
   });
 
+  test("stores only non-default formatting metadata", () => {
+    const sheet = new SparseSheet();
+
+    sheet.setCellFormat(
+      { col: 2, row: 3 },
+      {
+        align: "center",
+        backgroundColor: "#fff7d6",
+        bold: false,
+        fontFamily: "serif",
+        fontSize: 18,
+        italic: false,
+        textColor: "#1f2937",
+        underline: true,
+      }
+    );
+
+    assert.deepEqual(sheet.getCellFormat({ col: 2, row: 3 }), {
+      align: "center",
+      backgroundColor: "#fff7d6",
+      fontFamily: "serif",
+      fontSize: 18,
+      textColor: "#1f2937",
+      underline: true,
+    });
+
+    sheet.patchCellFormat(
+      { col: 2, row: 3 },
+      {
+        align: undefined,
+        fontFamily: undefined,
+        fontSize: undefined,
+        underline: false,
+      }
+    );
+
+    assert.deepEqual(sheet.getCellFormat({ col: 2, row: 3 }), {
+      backgroundColor: "#fff7d6",
+      textColor: "#1f2937",
+    });
+  });
+
   test("computes chunk keys for addresses and viewport ranges", () => {
     assert.equal(
       getChunkKeyForAddress({ col: 100, row: 100 }, DEFAULT_CHUNK_SIZE),

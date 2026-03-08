@@ -55,6 +55,10 @@ function normalizeCellFormat(
 
   const nextFormat: CellFormatRecord = {};
 
+  if (format.align) {
+    nextFormat.align = format.align;
+  }
+
   if (format.backgroundColor) {
     nextFormat.backgroundColor = format.backgroundColor;
   }
@@ -63,12 +67,24 @@ function normalizeCellFormat(
     nextFormat.bold = true;
   }
 
+  if (format.fontFamily) {
+    nextFormat.fontFamily = format.fontFamily;
+  }
+
+  if (format.fontSize) {
+    nextFormat.fontSize = format.fontSize;
+  }
+
   if (format.italic) {
     nextFormat.italic = true;
   }
 
   if (format.textColor) {
     nextFormat.textColor = format.textColor;
+  }
+
+  if (format.underline) {
+    nextFormat.underline = true;
   }
 
   if ("updatedAt" in format && format.updatedAt) {

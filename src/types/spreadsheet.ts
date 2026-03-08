@@ -4,6 +4,13 @@ export interface CellAddress {
 }
 
 export type CellKind = "formula" | "number" | "text";
+export const CELL_FONT_FAMILIES = ["display", "mono", "sans", "serif"] as const;
+export type CellFontFamily = (typeof CELL_FONT_FAMILIES)[number];
+export const CELL_FONT_SIZES = [12, 14, 16, 18, 20] as const;
+export type CellFontSize = (typeof CELL_FONT_SIZES)[number];
+export const CELL_HORIZONTAL_ALIGNMENTS = ["left", "center", "right"] as const;
+export type CellHorizontalAlignment =
+  (typeof CELL_HORIZONTAL_ALIGNMENTS)[number];
 
 export interface CellContent {
   kind: CellKind;
@@ -11,10 +18,14 @@ export interface CellContent {
 }
 
 export interface CellFormat {
+  align?: CellHorizontalAlignment;
   backgroundColor?: string;
   bold?: boolean;
+  fontFamily?: CellFontFamily;
+  fontSize?: CellFontSize;
   italic?: boolean;
   textColor?: string;
+  underline?: boolean;
 }
 
 export interface FormulaInput {
