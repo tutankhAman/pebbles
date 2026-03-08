@@ -38,6 +38,69 @@ body {
     var(--background);
 }
 
+.fluid-shell {
+  gap: clamp(1rem, 1.2vw, 1.75rem);
+  padding: clamp(1.25rem, 2vw, 2.25rem) clamp(1rem, 2.8vw, 3.5rem)
+    clamp(1.5rem, 2.8vw, 3rem);
+}
+
+.fluid-panel {
+  padding: clamp(1.25rem, 1.8vw, 2.5rem);
+}
+
+.fluid-panel-tight {
+  padding: clamp(1rem, 1.4vw, 1.6rem);
+}
+
+.fluid-overline {
+  font-size: clamp(0.62rem, 0.5rem + 0.28vw, 0.76rem);
+  letter-spacing: 0.26em;
+}
+
+.fluid-label {
+  font-size: clamp(0.62rem, 0.52rem + 0.22vw, 0.72rem);
+  letter-spacing: 0.22em;
+}
+
+.fluid-body {
+  font-size: clamp(0.78rem, 0.68rem + 0.28vw, 0.98rem);
+  line-height: 1.8;
+}
+
+.fluid-body-tight {
+  font-size: clamp(0.74rem, 0.66rem + 0.22vw, 0.88rem);
+  line-height: 1.55;
+}
+
+.fluid-micro {
+  font-size: clamp(0.66rem, 0.58rem + 0.2vw, 0.78rem);
+  line-height: 1.45;
+}
+
+.fluid-title {
+  font-size: clamp(1.18rem, 0.98rem + 0.9vw, 1.9rem);
+  line-height: 1.08;
+}
+
+.fluid-display {
+  font-size: clamp(2rem, 1.2rem + 2.5vw, 4.4rem);
+  line-height: 0.95;
+}
+
+.fluid-metric {
+  font-size: clamp(1.6rem, 1.1rem + 1.6vw, 2.5rem);
+  line-height: 1;
+}
+
+.fluid-button {
+  font-size: clamp(0.68rem, 0.58rem + 0.22vw, 0.82rem);
+  letter-spacing: 0.2em;
+}
+
+.fluid-input {
+  font-size: clamp(0.84rem, 0.72rem + 0.22vw, 0.98rem);
+}
+
 h1,
 h2,
 h3,
