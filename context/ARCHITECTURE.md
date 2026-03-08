@@ -25,46 +25,52 @@ Lightweight real-time collaborative spreadsheet for the Trademarkia frontend eng
 
 | Layer | Choice | Responsibility |
 | --- | --- | --- |
-| App shell | Next.js App Router | Routing, server/client boundaries, deployment |
+| App shell | Next.js App Router | Routing, server/client boundaries, Vercel deployment |
 | Language | TypeScript strict mode | Type safety across UI, state, and worker boundaries |
 | Styling | Tailwind CSS | UI styling and layout |
 | Identity | Firebase Auth | Google sign-in and session identity bootstrap |
-| Metadata store | InstantDB (current) | Early-phase document list, title, owner, room id, last modified, access metadata |
-| Live collaboration | Yjs | Live cell state, CRDT convergence, presence awareness |
-| Durable content store | Chunked Yjs persistence backend (target) | Saved sheet contents, cross-device restore, large-sheet chunk storage |
-| Metadata + chunk registry | Consolidated backend (target) | Final metadata ownership, access control, chunk registry, room lookup |
+| Backend platform | Cloudflare Workers + Durable Objects | Single deployment for metadata, collaboration relay, and sheet persistence |
+| Metadata store | MetadataStore Durable Object (SQLite) | Document list, title, owner, room id, last modified, user records |
+| Live collaboration | Yjs + CollabDocument Durable Object | Live cell state, CRDT convergence, presence awareness, WebSocket relay |
+| Durable content store | CollabDocument DO SQLite storage | Yjs document state persistence, cross-device restore |
+| Worker routing | Hono | REST and WebSocket routing inside Cloudflare Worker |
+| Yjs DO integration | y-durableobjects | Yjs sync protocol handling in Durable Objects |
 | Formula engine | HyperFormula | Formula parsing, dependency tracking, computed values |
-| Local UI state | Zustand | Selection, editor mode, viewport, write-state status |
+| Local UI state | React useState/useRef | Selection, editor mode, viewport, write-state status |
 | Worker runtime | Web Worker | Isolated formula evaluation |
 
 ## High-Level Architecture
 
 ```text
 Browser
- ├─ Next.js UI
+ ├─ Next.js UI (deployed on Vercel)
  │   ├─ Dashboard
  │   ├─ Spreadsheet Editor
  │   ├─ Presence UI
  │   └─ Write-State Indicator
- ├─ Zustand UI Store
- ├─ Yjs Document + Provider
+ ├─ Local UI State (useState/useRef)
+ ├─ Yjs Document
+ │   ├─ BroadcastChannel (same-browser sync, <5ms)
+ │   └─ WebSocket transport (cross-device sync, ~50-100ms)
  ├─ HyperFormula Worker
+ ├─ localStorage Yjs cache
  └─ Firebase Auth Client
 
-Backend Services - current implementation
- ├─ Firebase Auth
- └─ InstantDB
-     ├─ users
-     ├─ documents
-     └─ access / membership metadata
+Cloudflare Worker (single deployment)
+ ├─ Hono Router
+ │   ├─ REST endpoints -> MetadataStore DO
+ │   └─ WebSocket upgrade -> CollabDocument DO
+ ├─ MetadataStore Durable Object (global singleton)
+ │   ├─ SQLite: documents table
+ │   └─ SQLite: users table
+ └─ CollabDocument Durable Object (one per document)
+     ├─ In-memory Yjs Doc + Awareness
+     ├─ WebSocket relay (binary Yjs updates)
+     ├─ SQLite: persisted Yjs document state
+     └─ WebSocket Hibernation (zero cost when idle)
 
-Backend Services - target scalable architecture
- ├─ Firebase Auth
- ├─ Consolidated metadata + chunk registry backend
- └─ Durable Yjs persistence backend
-     ├─ room lookup
-     ├─ chunk registry
-     └─ chunked Yjs document persistence
+External Services
+ └─ Firebase Auth
 ```
 
 ## Source of Truth Rules
@@ -79,33 +85,30 @@ Backend Services - target scalable architecture
 
 ### Metadata
 
-- `InstantDB` is the authoritative source of truth for:
+- `MetadataStore` Durable Object SQLite is the authoritative source of truth for:
   - document id
   - title
   - owner / author
   - last modified
   - collaboration room identifier
-  - optional access records
-- In the target architecture, this metadata ownership migrates behind a repository boundary to the consolidated backend.
+  - user records
 
 ### Durable content persistence
 
-- The final scalable backend stores saved sheet contents as Yjs-compatible persisted state.
-- For very large dense sheets, persisted state should be partitioned into chunks rather than stored as one giant document blob.
-- The durable content store is responsible for:
+- `CollabDocument` Durable Object SQLite stores persisted Yjs document state.
+- This is the recovery source for:
   - restoring sheet contents after all clients disconnect
   - cross-device document recovery
-  - chunk lookup for large-sheet working sets
-- `InstantDB` is not intended to store live cell contents or chunk payloads in the target architecture.
+  - cold-start room hydration
+- Sheet contents are stored as encoded Yjs binary state, not as row-per-cell relational records.
 
 ### Local UI state
 
-- `Zustand` is authoritative only for ephemeral client state:
+- React `useState`/`useRef` is authoritative only for ephemeral client state:
   - selected cell or range
   - editor open / closed state
   - viewport window
   - write-state indicator status
-  - transient performance counters for debug UI if needed
 
 ### Derived state
 
@@ -115,32 +118,38 @@ Backend Services - target scalable architecture
 
 ## Repository Shape
 
-The project should stay lean unless implementation complexity justifies internal modules.
-
 ```text
-apps/
-  web/
+pebbles/
+  src/
     app/
-    components/
+      layout.tsx
+      page.tsx
+      dashboard/
+      documents/[documentId]/
     features/
       auth/
       dashboard/
+      documents/
       spreadsheet/
       collaboration/
       formulas/
     lib/
       firebase/
-      instantdb/
-      yjs/
-      worker/
+      metadata/          # client-side metadata API calls
+      yjs/               # BroadcastCollaborationRoom, transport protocol, persistence
+      env/
     workers/
       formula.worker.ts
-    stores/
-      ui-store.ts
     types/
+    providers/
+  worker/                # Cloudflare Worker project
+    src/
+      index.ts           # Hono router entry point
+      collab-document.ts # CollabDocument Durable Object
+      metadata-store.ts  # MetadataStore Durable Object
+    wrangler.toml
+  context/               # Planning and architecture docs
 ```
-
-If feature growth demands stronger boundaries, extract local packages later, not at the start.
 
 ## Runtime Components
 
@@ -154,7 +163,7 @@ If feature growth demands stronger boundaries, extract local packages later, not
 
 ### Data source
 
-- Reads and writes metadata from `InstantDB`.
+- Reads and writes metadata via REST API calls to the Cloudflare Worker (`MetadataStore` DO).
 
 ### Notes
 
@@ -186,12 +195,11 @@ If feature growth demands stronger boundaries, extract local packages later, not
 - Merge concurrent edits through CRDT semantics.
 - Broadcast presence through awareness.
 
-### Planned structure
+### Document structure
 
 ```text
 Y.Doc
  ├─ cells: Y.Map<string, CellRecord>
- ├─ meta: Y.Map<string, string | number | boolean>
  └─ awareness: user presence state
 ```
 
@@ -216,6 +224,21 @@ Notes:
 - `raw` stores the user-entered source, including formula strings like `=SUM(A1:A5)`.
 - Computed values are not stored as the primary editable source in Yjs.
 - `updatedAt` and `updatedBy` are optional and only used if collaboration UI benefits from them.
+
+### Hybrid transport strategy
+
+The collaboration layer uses a three-tier latency model:
+
+| Tier | Transport | Latency | Scope |
+| --- | --- | --- | --- |
+| Local edit | Yjs local apply | `<1ms` | Immediate visual feedback |
+| Same-browser | BroadcastChannel | `<5ms` | Multi-tab sync without network |
+| Cross-device | CF DO WebSocket relay | `~50-100ms` same-region | Cross-browser, cross-device sync |
+
+- Local Yjs edits always apply before any network round-trip.
+- BroadcastChannel provides instant same-browser tab sync without touching the network.
+- The Cloudflare DO WebSocket relay handles cross-device peers. The DO acts as both the relay and the durable persistence layer.
+- Both transports coexist: same-browser tabs use BroadcastChannel AND the WebSocket transport simultaneously.
 
 ## 4. HyperFormula Worker
 
@@ -253,16 +276,46 @@ type FormulaWorkerResponse =
 - Not required:
   - advanced financial, lookup, pivot, or scripting functions
 
-## 5. InstantDB Metadata Layer
+## 5. Cloudflare Worker Backend
 
 ### Responsibility
 
-- Store document discovery and dashboard metadata.
-- Provide a stable mapping from document id to collaboration room id.
-- Track update time for dashboard sorting and display.
-- Serve as the early-phase metadata layer before later backend consolidation.
+- Single deployment handling all backend concerns:
+  - document metadata CRUD
+  - user record management
+  - collaboration WebSocket relay
+  - durable Yjs state persistence
+  - presence/awareness relay
 
-### Suggested metadata model
+### Components
+
+#### MetadataStore Durable Object
+
+- Global singleton instance.
+- Uses DO SQLite storage for documents and users tables.
+- Serves REST API endpoints via Hono router.
+- Handles: list documents, get document, create document, rename document, touch document, upsert user.
+
+#### CollabDocument Durable Object
+
+- One instance per document, identified by `roomId`.
+- Maintains in-memory `Y.Doc` and `Awareness` for the active room.
+- Handles WebSocket connections using the Hibernation API:
+  - Idle rooms are evicted from memory while WebSocket connections stay alive.
+  - On wake, constructor re-runs, state is restored from SQLite.
+- Persists Yjs document state to DO SQLite on a debounced schedule.
+- Relays binary Yjs updates and awareness messages between connected peers.
+- Uses `locationHint` to spawn near the document creator's region.
+
+### Why Cloudflare Durable Objects
+
+- Per-document stateful isolation maps naturally to Yjs rooms.
+- Co-located SQLite storage means microsecond reads and sub-millisecond writes.
+- WebSocket Hibernation eliminates cost for idle documents.
+- Single Worker deployment simplifies operations vs managing separate services.
+- Honest tradeoff: ~50-100ms cross-device latency vs ~10-40ms on a direct VPS, but the demo scenario (two browser tabs) uses BroadcastChannel and is unaffected.
+
+### Metadata model
 
 ```ts
 type UserMeta = {
@@ -283,96 +336,48 @@ type DocumentMeta = {
 }
 ```
 
-Optional access model:
-
-```ts
-type DocumentAccess = {
-  id: string
-  documentId: string
-  userId: string
-  role: "owner" | "editor" | "viewer"
-}
-```
-
-## 6. Target Consolidated Backend
-
-### Responsibility
-
-- Replace long-term `InstantDB` dependency without breaking established editor contracts.
-- Own final metadata, access control, room lookup, and chunk registry concerns.
-- Coordinate with the durable Yjs persistence backend for sheet-content restore.
-
-### Target data ownership
-
-```ts
-type DocumentMetaRecord = {
-  id: string
-  title: string
-  ownerId: string
-  ownerName: string
-  roomId: string
-  lastModifiedAt: number
-  createdAt: number
-  chunkLayoutVersion: number
-}
-
-type DocumentAccessRecord = {
-  id: string
-  documentId: string
-  userId: string
-  role: "owner" | "editor" | "viewer"
-}
-
-type SheetChunkRecord = {
-  id: string
-  documentId: string
-  chunkId: string
-  persistedStateRef: string
-  updatedAt: number
-}
-```
-
-### Notes
-
-- The consolidated backend should not store sheet contents as row-per-cell relational records.
-- It should track which chunks exist and where their durable Yjs-compatible state lives.
-- This keeps metadata queries cheap while preserving a scalable path for dense sheets.
-
 ## Data Flow Specifications
 
 ## Document open flow
 
 ```text
 1. User opens dashboard
-2. Client queries InstantDB document metadata
+2. Client queries CF Worker MetadataStore for document list
 3. User selects a document
 4. Client resolves roomId from metadata
-5. Client joins Yjs room
-6. Client bootstraps local sparse sheet view from Yjs state
-7. Client sends sheet state to HyperFormula worker
-8. Editor renders visible cells
+5. Client joins Yjs room:
+   a. Hydrates from localStorage cache (instant)
+   b. Connects BroadcastChannel (same-browser)
+   c. Connects WebSocket to CF Worker CollabDocument DO (cross-device)
+6. CollabDocument DO restores Yjs state from SQLite if cold start
+7. Client bootstraps local sparse sheet view from Yjs state
+8. Client sends sheet state to HyperFormula worker
+9. Editor renders visible cells
 ```
 
 ## Cell edit flow
 
 ```text
 1. User edits cell
-2. UI writes raw cell content into Yjs
+2. UI writes raw cell content into local Yjs doc (<1ms)
 3. Local write-state becomes Saving...
 4. Local Yjs update is observed immediately
-5. Main thread sends changed cell to HyperFormula worker
-6. Worker recomputes affected formulas
-7. UI receives computed outputs
-8. Remote peers receive Yjs update
-9. Write-state transitions to Saved when local sync is considered landed
-10. Metadata lastModifiedAt is updated asynchronously through the active repository implementation
+5. BroadcastChannel propagates to same-browser tabs (<5ms)
+6. WebSocket sends binary Yjs update to CF CollabDocument DO
+7. DO relays update to other connected peers (~50-100ms same-region)
+8. DO persists Yjs state to SQLite (debounced)
+9. Main thread sends changed cell to HyperFormula worker
+10. Worker recomputes affected formulas
+11. UI receives computed outputs
+12. Write-state transitions to Saved
+13. Metadata lastModifiedAt is updated asynchronously via MetadataStore DO
 ```
 
 ## Remote edit flow
 
 ```text
 1. Remote peer writes to Yjs
-2. Local client receives Yjs update
+2. Local client receives Yjs update (via BroadcastChannel or WebSocket)
 3. Updated raw cell state is merged into local sheet view
 4. Changed formula inputs are forwarded to HyperFormula worker
 5. UI rerenders affected visible cells
@@ -383,10 +388,11 @@ type SheetChunkRecord = {
 
 ```text
 1. User joins document
-2. Client publishes awareness state
-3. Other clients receive active user metadata
-4. Presence bar and optional selection indicators update
-5. User disconnect or tab close clears awareness state
+2. Client publishes awareness state (name, color, cursor)
+3. Awareness propagates via BroadcastChannel + WebSocket
+4. Other clients receive active user metadata
+5. Presence bar and selection indicators update
+6. User disconnect or tab close clears awareness state
 ```
 
 ## Write-State Indicator Specification
@@ -433,9 +439,8 @@ type CellAddress = {
 ### Logical bounds
 
 - The editor supports at least `1M` logical cells.
-- Suggested default logical shape:
+- Default logical shape:
   - `10,000` rows x `100` columns
-  - or another equivalent size so long as the product of rows and columns meets or exceeds `1,000,000`
 
 ### Selection model
 
@@ -451,8 +456,7 @@ type Selection =
 
 - Render only visible rows and columns plus overscan.
 - Keep row and column headers pinned relative to the scroll container.
-- Prefer DOM-based virtualization first for assignment speed unless canvas becomes necessary.
-- For dense large-sheet scaling, the persisted model can be chunked even if the initial rendered viewport remains a single editor surface.
+- DOM-based virtualization for assignment speed.
 
 ### Render responsibilities
 
@@ -490,7 +494,7 @@ These tradeoffs should be described honestly in the README and demo.
 ### Auth modes
 
 - Primary: Firebase Google sign-in
-- Fallback: first-session display-name prompt if a looser demo mode is desired
+- Fallback: first-session display-name prompt for guest mode
 
 ### Identity payload used in collaboration UI
 
@@ -510,22 +514,29 @@ type SessionIdentity = {
 
 ## Performance Targets
 
-### Primary targets
+### Tiered latency model
+
+| Tier | Target | Transport |
+| --- | --- | --- |
+| Local edit to screen | `<1ms` | Direct Yjs apply |
+| Same-browser tab sync | `<5ms` | BroadcastChannel |
+| Cross-device same-region | `~50-100ms` | CF DO WebSocket relay |
+| Cross-device cross-region | Higher, documented honestly | CF DO WebSocket relay |
+
+### Other targets
 
 - `1M` logical cells supported through sparse storage
-- `<50ms` collaboration propagation under normal local-region conditions
 - Smooth visible-window scrolling during demo scenarios
-- Same-browser collaboration keeps the `BroadcastChannel` fast path even after cross-device transport is added
-- Large dense sheets are persisted and restored through chunked Yjs-backed state rather than one monolithic document
+- Same-browser collaboration keeps the `BroadcastChannel` fast path regardless of cross-device transport state
 
 ### Measurement plan
 
 - measure initial document open time
-- measure local edit to remote visible update time across two tabs
-- measure local edit to remote visible update time across two devices on the networked provider
+- measure local edit to remote visible update time across two tabs (BroadcastChannel)
+- measure local edit to remote visible update time across two devices (CF DO relay)
 - measure visible-window rerender cost
 - measure formula recompute time for small dependency chains
-- measure cross-device restore time from durable Yjs persistence
+- measure cross-device restore time from DO SQLite persistence
 
 ### Likely hot paths
 
@@ -533,8 +544,8 @@ type SessionIdentity = {
 - visible-cell rerender boundaries
 - Yjs update fan-out into UI state
 - worker recomputation batching
-- provider message size and batching
-- chunk hydrate and restore path
+- WebSocket message size and batching
+- DO wake-from-hibernation cost
 
 ## Deployment Model
 
@@ -542,12 +553,16 @@ type SessionIdentity = {
 
 - Deploy to Vercel
 
+### Backend
+
+- Deploy Cloudflare Worker with `wrangler deploy`
+- Single Worker handles REST + WebSocket endpoints
+- Durable Objects handle per-document state and global metadata
+
 ### Runtime requirements
 
-- Firebase environment variables
-- InstantDB configuration
-- Yjs provider configuration
-- durable Yjs persistence backend configuration
+- Firebase environment variables (client-side)
+- `NEXT_PUBLIC_API_URL` pointing to the Cloudflare Worker (used for both REST and WebSocket)
 
 ### Build requirements
 
@@ -563,6 +578,7 @@ type SessionIdentity = {
 - sparse storage helpers
 - formula worker protocol adapters
 - write-state transition logic
+- transport protocol encoding/decoding
 
 ### Integration tests
 
@@ -581,24 +597,15 @@ type SessionIdentity = {
 - show write-state transitions
 - show `SUM` and a basic arithmetic formula
 
-## Open Implementation Decisions
-
-- Which networked Yjs provider transport to use for cross-device collaboration
-- Whether DOM virtualization is sufficient or canvas should be introduced
-- Whether clipboard support lands in MVP or immediate post-MVP polish
-- Whether `AVERAGE` is included if HyperFormula makes it essentially free
-- When to execute the InstantDB migration relative to submission timing
-- Which consolidated backend should own metadata and chunk registry after migration
-
 ## Interview Summary
 
 The core design choice is deliberate:
 
-- `Yjs` handles live collaborative state because it solves contention cleanly.
-- `InstantDB` handles metadata in early phases because the dashboard and document discovery do not need CRDT complexity.
-- The final scalable backend can remove the `InstantDB` dependency once metadata and chunk-registry responsibilities migrate behind stable repository boundaries.
-- Durable sheet contents should live as chunked Yjs-compatible state, not as row-per-cell database writes.
+- `Yjs` handles live collaborative state because it solves contention cleanly through CRDT convergence.
+- `Cloudflare Durable Objects` provide the single consolidated backend: metadata storage, collaboration WebSocket relay, and durable Yjs document persistence, all in one deployment.
+- The hybrid transport strategy uses `BroadcastChannel` for `<5ms` same-browser sync and CF DO WebSocket relay for `~50-100ms` cross-device sync, with local edits always applying instantly regardless of network state.
 - `HyperFormula` runs in a worker because formulas should not compete with rendering and interaction.
-- `Zustand` stays limited to local UI state to keep ownership boundaries clear.
+- Local UI state uses React primitives (`useState`/`useRef`) to keep ownership boundaries clear.
+- The architecture is honestly documented: cross-device latency is higher than a direct VPS WebSocket (~50-100ms vs ~10-40ms), but the tradeoff buys simpler operations, zero idle cost, and co-located persistence.
 
 This gives a submission that is technically credible, performant enough for the assignment, and easy to defend under architectural questioning.
