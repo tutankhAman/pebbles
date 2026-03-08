@@ -4,7 +4,6 @@ import { parseCellKey } from "@/features/spreadsheet/addressing";
 import { getResolvedHorizontalAlign } from "@/features/spreadsheet/cell-formatting";
 import { moveAxisItem } from "@/features/spreadsheet/sheet-layout";
 import { SparseSheet } from "@/features/spreadsheet/sparse-sheet";
-import type { DocumentMeta } from "@/types/metadata";
 import type {
   CellFontFamily,
   CellFormatRecord,
@@ -36,35 +35,8 @@ const CELL_FONT_FAMILY_STYLES: Record<CellFontFamily, string> = {
   serif: 'Georgia, "Times New Roman", serif',
 };
 
-export function createSeededSheet(document: DocumentMeta) {
-  const sheet = new SparseSheet();
-
-  sheet.batchPaste({ col: 1, row: 1 }, [
-    [document.title, "Owner", document.ownerName, "Status", "Phase 5"],
-    [
-      "Room",
-      document.roomId.slice(0, 12),
-      "Modified",
-      new Intl.DateTimeFormat("en", {
-        dateStyle: "medium",
-        timeStyle: "short",
-      }).format(document.lastModifiedAt),
-      "Type, tab, paste, or drag-select",
-    ],
-    ["Rows", "10,000", "Columns", "100", "Logical cells", "1,000,000"],
-  ]);
-
-  sheet.batchPaste({ col: 1, row: 5 }, [
-    ["12", "8", "=A5+B5", "=SUM(A5:B5)", "=SUM(A5,C5)"],
-    ["Formula input", "Formula input", "A+B", "SUM range", "SUM args"],
-  ]);
-
-  sheet.setCell({ col: 1, row: 128 }, "Checkpoint row 128");
-  sheet.setCell({ col: 4, row: 512 }, "Checkpoint row 512");
-  sheet.setCell({ col: 6, row: 4096 }, "Sparse far field");
-  sheet.setCell({ col: 26, row: 9999 }, "Edge probe");
-
-  return sheet;
+export function createSeededSheet() {
+  return new SparseSheet();
 }
 
 export function getCellDisplayValue(cell: CellRecord | null) {

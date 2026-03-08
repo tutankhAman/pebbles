@@ -160,6 +160,9 @@ export function VirtualizedSheet({
   const formulaBarRef = useRef<HTMLInputElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const keyboardProxyRef = useRef<HTMLTextAreaElement | null>(null);
+  const cellEditorSelectionBehaviorRef = useRef<"caret-at-end" | "select-all">(
+    "select-all"
+  );
   const pointerAnchorRef = useRef<CellAddress | null>(null);
   const clipboardTextRef = useRef("");
   const isPointerSelectingRef = useRef(false);
@@ -316,10 +319,7 @@ export function VirtualizedSheet({
     () => searchMatches.findIndex((match) => match.key === activeCellKey),
     [activeCellKey, searchMatches]
   );
-  const seededSheetSnapshot = useMemo(
-    () => createSeededSheet(document).snapshot(),
-    [document]
-  );
+  const seededSheetSnapshot = useMemo(() => createSeededSheet().snapshot(), []);
   const initialSeedCells = useMemo(
     () =>
       Array.from(seededSheetSnapshot.cells, ([key, value]) => ({
@@ -851,7 +851,10 @@ export function VirtualizedSheet({
   const startEditing = (
     address: CellAddress,
     initialValue?: string,
-    surface: EditorSurface = "cell"
+    surface: EditorSurface = "cell",
+    options?: {
+      selectAll?: boolean;
+    }
   ) => {
     const nextValue =
       initialValue ?? getCellDisplayValue(sheet.getCell(address));
@@ -861,8 +864,16 @@ export function VirtualizedSheet({
     setEditorMode(nextValue.startsWith("=") ? "formula" : "edit");
 
     if (surface === "cell") {
+      cellEditorSelectionBehaviorRef.current =
+        options?.selectAll === false ? "caret-at-end" : "select-all";
       applySelection(createCellSelection(address));
     }
+  };
+
+  const startTypingEdit = (address: CellAddress, initialValue: string) => {
+    startEditing(address, initialValue, "cell", {
+      selectAll: false,
+    });
   };
 
   const stopEditing = () => {
@@ -935,7 +946,19 @@ export function VirtualizedSheet({
     }
 
     inputRef.current?.focus();
-    inputRef.current?.select();
+    const input = inputRef.current;
+
+    if (!input) {
+      return;
+    }
+
+    if (cellEditorSelectionBehaviorRef.current === "select-all") {
+      input.select();
+      return;
+    }
+
+    const caretPosition = input.value.length;
+    input.setSelectionRange(caretPosition, caretPosition);
   }, [editingAddress]);
 
   useEffect(() => {
@@ -1347,7 +1370,7 @@ export function VirtualizedSheet({
         event,
         rowLayout,
         selection,
-        startEditing,
+        startTypingEdit,
       })
     ) {
       return;
