@@ -1,5 +1,16 @@
 "use client";
 
+import {
+  AlignCenter,
+  AlignLeft,
+  AlignRight,
+  Baseline,
+  Bold,
+  Italic,
+  PaintBucket,
+  Type,
+  Underline,
+} from "lucide-react";
 import { useRouter } from "next/navigation";
 import {
   type ClipboardEvent,
@@ -94,16 +105,9 @@ import type {
   SnapshotChanges,
 } from "@/features/spreadsheet/virtualized-sheet-types";
 import {
-  AlignCenterIcon,
-  AlignLeftIcon,
-  AlignRightIcon,
   createShortcutLabel,
-  FillColorIcon,
-  FontFamilyIcon,
-  FontSizeIcon,
   MenuButton,
   MenuItem,
-  TextColorIcon,
   VirtualCell,
 } from "@/features/spreadsheet/virtualized-sheet-ui";
 import { renameDocument, touchDocument } from "@/lib/metadata/metadata-store";
@@ -1953,20 +1957,18 @@ export function VirtualizedSheet({
         ) : null}
       </div>
 
-      <div className="border-[#e0e0e0] border-b bg-[linear-gradient(180deg,#f4f7fb_0%,#edf2fa_100%)]">
-        <div className="flex flex-wrap items-center gap-2 px-3 py-2">
-          <div className="flex items-center gap-1 rounded-lg bg-white/92 p-1 shadow-[0_1px_2px_rgba(32,33,36,0.08)] ring-1 ring-[#d6dbe3]">
+      <div className="border-[#e0e3e7] border-b bg-[#f8f9fa]">
+        <div className="flex flex-wrap items-center gap-[0.375rem] px-3 py-[0.375rem]">
+          <div className="flex items-center gap-0.5 bg-white p-[0.1875rem] shadow-sm ring-1 ring-[#e0e3e7]">
             <label
-              className="flex items-center gap-2 rounded-md px-2 py-1 text-[#202124] text-[0.75rem] transition-colors hover:bg-[#f6f8fb]"
+              className="flex h-7 items-center gap-1.5 px-1.5 text-[#444746] transition-colors hover:bg-[#f1f3f4]"
               title="Font family"
             >
-              <span className="text-[#5f6368]">
-                <FontFamilyIcon />
-              </span>
+              <Type className="h-[0.875rem] w-[0.875rem] stroke-[2] text-[#5f6368]" />
               <span className="sr-only">Font family</span>
               <select
                 aria-label="Cell font family"
-                className="min-w-[5.75rem] bg-transparent text-[0.75rem] outline-none"
+                className="h-full min-w-[5.75rem] bg-transparent text-[0.75rem] leading-none outline-none"
                 onChange={(event) => {
                   const nextFontFamily = event.target.value;
 
@@ -1988,16 +1990,14 @@ export function VirtualizedSheet({
               </select>
             </label>
             <label
-              className="flex items-center gap-2 rounded-md px-2 py-1 text-[#202124] text-[0.75rem] transition-colors hover:bg-[#f6f8fb]"
+              className="flex h-7 items-center gap-1.5 px-1.5 text-[#444746] transition-colors hover:bg-[#f1f3f4]"
               title="Font size"
             >
-              <span className="text-[#5f6368]">
-                <FontSizeIcon />
-              </span>
+              <Type className="h-[0.875rem] w-[0.875rem] stroke-[2] text-[#5f6368]" />
               <span className="sr-only">Font size</span>
               <select
                 aria-label="Cell font size"
-                className="w-11 bg-transparent text-[0.75rem] outline-none"
+                className="h-full w-11 bg-transparent text-[0.75rem] leading-none outline-none"
                 onChange={(event) => {
                   const nextFontSize = event.target.value;
 
@@ -2020,7 +2020,7 @@ export function VirtualizedSheet({
             </label>
           </div>
 
-          <div className="flex items-center gap-1 rounded-lg bg-white/92 p-1 shadow-[0_1px_2px_rgba(32,33,36,0.08)] ring-1 ring-[#d6dbe3]">
+          <div className="flex items-center gap-0.5 bg-white p-[0.1875rem] shadow-sm ring-1 ring-[#e0e3e7]">
             <button
               aria-label="Bold"
               className={getToolbarButtonClassName(
@@ -2034,7 +2034,7 @@ export function VirtualizedSheet({
               title="Bold"
               type="button"
             >
-              <span className="font-black text-[0.82rem]">B</span>
+              <Bold className="h-4 w-4 stroke-[2.5]" />
             </button>
             <button
               aria-label="Italic"
@@ -2049,7 +2049,7 @@ export function VirtualizedSheet({
               title="Italic"
               type="button"
             >
-              <span className="text-[0.82rem] italic">I</span>
+              <Italic className="h-4 w-4 stroke-[2.5]" />
             </button>
             <button
               aria-label="Underline"
@@ -2064,31 +2064,20 @@ export function VirtualizedSheet({
               title="Underline"
               type="button"
             >
-              <span className="text-[0.82rem] underline decoration-[1.5px] underline-offset-[2px]">
-                U
-              </span>
+              <Underline className="h-4 w-4 stroke-[2.5]" />
             </button>
           </div>
 
-          <div className="flex items-center gap-1 rounded-lg bg-white/92 p-1 shadow-[0_1px_2px_rgba(32,33,36,0.08)] ring-1 ring-[#d6dbe3]">
+          <div className="flex items-center gap-0.5 bg-white p-[0.1875rem] shadow-sm ring-1 ring-[#e0e3e7]">
             <label
-              className="flex items-center gap-2 rounded-md px-2 py-1 text-[#202124] text-[0.75rem] transition-colors hover:bg-[#f6f8fb]"
+              className="flex h-7 items-center gap-1.5 px-1.5 text-[#444746] transition-colors hover:bg-[#f1f3f4]"
               title="Text color"
             >
-              <span className="text-[#5f6368]">
-                <TextColorIcon />
-              </span>
-              <span
-                aria-hidden="true"
-                className="h-3 w-3 rounded-full border border-[#c5c9ce]"
-                style={{
-                  backgroundColor: activeCellFormat?.textColor ?? "#172333",
-                }}
-              />
+              <Baseline className="h-[0.875rem] w-[0.875rem] stroke-[2] text-[#5f6368]" />
               <span className="sr-only">Text color</span>
               <input
                 aria-label="Cell text color"
-                className="h-6 w-7 cursor-pointer rounded border-none bg-transparent p-0"
+                className="h-full w-5 cursor-pointer border-none bg-transparent p-0"
                 onChange={(event) => {
                   applyFormattingPatch({
                     textColor: event.target.value,
@@ -2100,24 +2089,14 @@ export function VirtualizedSheet({
               />
             </label>
             <label
-              className="flex items-center gap-2 rounded-md px-2 py-1 text-[#202124] text-[0.75rem] transition-colors hover:bg-[#f6f8fb]"
+              className="flex h-7 items-center gap-1.5 px-1.5 text-[#444746] transition-colors hover:bg-[#f1f3f4]"
               title="Fill color"
             >
-              <span className="text-[#5f6368]">
-                <FillColorIcon />
-              </span>
-              <span
-                aria-hidden="true"
-                className="h-3 w-3 rounded-full border border-[#c5c9ce]"
-                style={{
-                  backgroundColor:
-                    activeCellFormat?.backgroundColor ?? "#ffffff",
-                }}
-              />
+              <PaintBucket className="h-[0.875rem] w-[0.875rem] stroke-[2] text-[#5f6368]" />
               <span className="sr-only">Fill color</span>
               <input
                 aria-label="Cell fill color"
-                className="h-6 w-7 cursor-pointer rounded border-none bg-transparent p-0"
+                className="h-full w-5 cursor-pointer border-none bg-transparent p-0"
                 onChange={(event) => {
                   applyFormattingPatch({
                     backgroundColor: event.target.value,
@@ -2130,22 +2109,22 @@ export function VirtualizedSheet({
             </label>
           </div>
 
-          <div className="flex items-center gap-1 rounded-lg bg-white/92 p-1 shadow-[0_1px_2px_rgba(32,33,36,0.08)] ring-1 ring-[#d6dbe3]">
+          <div className="flex items-center gap-0.5 bg-white p-[0.1875rem] shadow-sm ring-1 ring-[#e0e3e7]">
             {(
               [
                 {
                   alignment: "left" as const,
-                  icon: <AlignLeftIcon />,
+                  icon: <AlignLeft className="h-4 w-4" />,
                   label: "Align left",
                 },
                 {
                   alignment: "center" as const,
-                  icon: <AlignCenterIcon />,
+                  icon: <AlignCenter className="h-4 w-4" />,
                   label: "Align center",
                 },
                 {
                   alignment: "right" as const,
-                  icon: <AlignRightIcon />,
+                  icon: <AlignRight className="h-4 w-4" />,
                   label: "Align right",
                 },
               ] as const

@@ -1,4 +1,4 @@
-import { memo, type SVGProps } from "react";
+import { memo } from "react";
 import { getRenderedCellValue } from "@/features/spreadsheet/cell-formatting";
 import { getCellLayout } from "@/features/spreadsheet/viewport";
 import type {
@@ -15,95 +15,6 @@ export function createShortcutLabel(label: string) {
     <span className="font-mono text-[#80868b] text-[0.6875rem] tracking-[0.02em]">
       {label}
     </span>
-  );
-}
-
-function ToolbarSvg(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg
-      fill="none"
-      height="14"
-      stroke="currentColor"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth="1.8"
-      viewBox="0 0 16 16"
-      width="14"
-      {...props}
-    />
-  );
-}
-
-export function FontFamilyIcon() {
-  return (
-    <ToolbarSvg aria-hidden="true">
-      <path d="M3 12.5 6.9 3.5h2.2l4 9" />
-      <path d="M5 8.9h5.8" />
-    </ToolbarSvg>
-  );
-}
-
-export function FontSizeIcon() {
-  return (
-    <ToolbarSvg aria-hidden="true">
-      <path d="M3 4.5h6" />
-      <path d="M6 4.5v8" />
-      <path d="M10 8.5h3" />
-      <path d="M11.5 8.5v4" />
-    </ToolbarSvg>
-  );
-}
-
-export function TextColorIcon() {
-  return (
-    <ToolbarSvg aria-hidden="true">
-      <path d="M3.5 12.5 7.8 3.5h.4l4.3 9" />
-      <path d="M5.1 9.2h5.8" />
-      <path d="M3 13.8h10" />
-    </ToolbarSvg>
-  );
-}
-
-export function FillColorIcon() {
-  return (
-    <ToolbarSvg aria-hidden="true">
-      <path d="m4 6.2 3.8-3.7 4 4-3.8 3.8z" />
-      <path d="M9.9 8.4 12.6 11" />
-      <path d="M3 13.2h10" />
-    </ToolbarSvg>
-  );
-}
-
-export function AlignLeftIcon() {
-  return (
-    <ToolbarSvg aria-hidden="true">
-      <path d="M3 4h8" />
-      <path d="M3 7h5.5" />
-      <path d="M3 10h8" />
-      <path d="M3 13h4.5" />
-    </ToolbarSvg>
-  );
-}
-
-export function AlignCenterIcon() {
-  return (
-    <ToolbarSvg aria-hidden="true">
-      <path d="M4 4h8" />
-      <path d="M5.5 7h5" />
-      <path d="M4 10h8" />
-      <path d="M6 13h4" />
-    </ToolbarSvg>
-  );
-}
-
-export function AlignRightIcon() {
-  return (
-    <ToolbarSvg aria-hidden="true">
-      <path d="M5 4h8" />
-      <path d="M7.5 7H13" />
-      <path d="M5 10h8" />
-      <path d="M8.5 13H13" />
-    </ToolbarSvg>
   );
 }
 

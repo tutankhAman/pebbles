@@ -118,10 +118,10 @@ export function getHeaderBackgroundColor(
 }
 
 export function getToolbarButtonClassName(isActive: boolean) {
-  return `flex h-8 min-w-8 items-center justify-center rounded-md px-2 text-[0.75rem] transition-all ${
+  return `flex h-7 min-w-7 items-center justify-center px-[0.375rem] text-[0.8125rem] transition-colors ${
     isActive
-      ? "bg-[#d3e3fd] text-[#041e49] shadow-[inset_0_0_0_1px_#aecbfa]"
-      : "bg-white text-[#444746] shadow-[inset_0_0_0_1px_#dadce0] hover:bg-[#f7f9fc]"
+      ? "bg-[#e8f0fe] text-[#1a73e8]"
+      : "bg-transparent text-[#444746] hover:bg-[#f1f3f4]"
   }`;
 }
 
