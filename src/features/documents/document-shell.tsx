@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useAuth } from "@/features/auth/auth-provider";
@@ -9,18 +10,6 @@ import { getDocumentById } from "@/lib/metadata/metadata-store";
 import type { CollaborationPresenceSnapshot } from "@/types/collaboration";
 import type { DocumentMeta } from "@/types/metadata";
 import type { WriteState } from "@/types/ui";
-
-const SPREADSHEET_ICON_CELLS = [
-  "cell-1",
-  "cell-2",
-  "cell-3",
-  "cell-4",
-  "cell-5",
-  "cell-6",
-  "cell-7",
-  "cell-8",
-  "cell-9",
-] as const;
 
 const DEFAULT_COLLABORATION_SNAPSHOT: CollaborationPresenceSnapshot = {
   activeCell: null,
@@ -120,13 +109,15 @@ export function DocumentShell({ documentId }: { documentId: string }) {
         <header className="relative z-40 overflow-visible border-[#e0e0e0] border-b bg-[linear-gradient(180deg,#ffffff,rgba(255,255,255,0.96))] px-3 py-2 shadow-[0_1px_0_rgba(60,64,67,0.08)]">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-2.5">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center bg-[#0f9d58]">
-                <div className="grid h-4 w-4 grid-cols-3 grid-rows-3 gap-[1px]">
-                  {SPREADSHEET_ICON_CELLS.map((cell) => (
-                    <span className="bg-white/90" key={cell} />
-                  ))}
-                </div>
-              </div>
+              <Link className="shrink-0" href="/dashboard">
+                <Image
+                  alt="Pebbles"
+                  className="h-8 w-8 object-contain"
+                  height={32}
+                  src="/pebbles.png"
+                  width={32}
+                />
+              </Link>
               <div className="min-w-0">
                 <h1 className="truncate font-normal text-[#202124] text-[1.125rem] leading-tight tracking-[-0.01em]">
                   {document.title}

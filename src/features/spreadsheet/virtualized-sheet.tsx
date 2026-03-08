@@ -2054,9 +2054,6 @@ export function VirtualizedSheet({
             <div className="flex items-center justify-end gap-2.5 border-[#e0e0e0] border-l px-3 text-[#80868b] text-[0.6875rem]">
               <span>{isReady ? "Ready" : "Loading"}</span>
               <span>{status}</span>
-              {lastRemoteLatencyMs != null ? (
-                <span>{lastRemoteLatencyMs}ms</span>
-              ) : null}
             </div>
           </div>
         ) : null}

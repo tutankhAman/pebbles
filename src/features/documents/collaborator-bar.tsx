@@ -189,11 +189,6 @@ export function CollaboratorBar({
       <div className="hidden h-8 border border-[#dadce0] bg-[#f8f9fa] px-3 font-medium text-[#5f6368] text-[0.6875rem] leading-none md:inline-flex md:items-center md:gap-2">
         <span className={`h-2 w-2 ${statusDotClassName}`} />
         <span>{statusLabel}</span>
-        {collaboration.lastRemoteLatencyMs != null ? (
-          <span className="text-[#80868b]">
-            {collaboration.lastRemoteLatencyMs}ms
-          </span>
-        ) : null}
       </div>
 
       <div className="flex h-8 min-w-0 items-center gap-2 border border-[#dadce0] bg-[#f8f9fa] px-2">
